@@ -111,6 +111,10 @@ export interface StoredSession {
   rootPid: number | null;
   totals: Usage;
   costUsd: number;
+  /** Set when the session was given its own git worktree. */
+  worktreePath?: string | null;
+  worktreeBranch?: string | null;
+  repoRoot?: string | null;
 }
 
 export interface StoredTurn {

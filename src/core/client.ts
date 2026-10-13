@@ -19,6 +19,8 @@ export interface OpenResult {
     closedAt: number | null;
     totals: Record<string, number>;
     costUsd: number;
+    worktreePath: string | null;
+    worktreeBranch: string | null;
   };
   events?: Event[];
   log?: string;
@@ -89,6 +91,18 @@ export class DaemonClient {
   }
   models(body: Record<string, unknown> = {}) {
     return this.call<{ models: string[]; total: number; default: string }>("/models", body);
+  }
+  diff(body: Record<string, unknown>) {
+    return this.call<{ files: string[]; patch: string; note?: string }>("/diff", body);
+  }
+  merge(body: Record<string, unknown>) {
+    return this.call<{ result: string }>("/merge", body);
+  }
+  discard(body: Record<string, unknown>) {
+    return this.call<{ removed: boolean; reason?: string }>("/discard", body);
+  }
+  sweep(body: Record<string, unknown>) {
+    return this.call<{ removed: string[]; skipped: string[]; note?: string }>("/sweep", body);
   }
   interrupt(body: Record<string, unknown>) {
     return this.call("/interrupt", body);

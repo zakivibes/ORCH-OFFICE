@@ -13,6 +13,12 @@ const help = `orch — persistent multi-agent orchestrator for claude, agy and o
 
   orch daemon [--foreground]     run the session daemon
   orch open <tool> <prompt>      start a session and send the first turn
+  orch diff <sessionId> [--stat]  show what the agent changed (needs --worktree)
+  orch compare <prompt> [--models a,b,c]
+                                  same prompt, several models, side by side
+  orch merge <sessionId> [--ff]   merge the agent's branch back into the base
+  orch discard <sessionId>        delete the worktree and its branch
+  orch sweep [dir]                remove worktrees orphaned by dead agents
   orch send <sessionId> <prompt> continue a live session (keeps its context)
   orch ls [--live]               list sessions
   orch status <sessionId>        session detail + effective permissions
@@ -30,6 +36,7 @@ Options:
   --label NAME     label the session
   --model M        model to pass through
   --wait MS        stop waiting after MS and leave the turn running
+  --worktree       isolate the agent in its own git worktree
 `;
 
 function flag(name: string): boolean {
@@ -179,8 +186,12 @@ async function main() {
         prompt,
         label: arg("--label"),
         model: arg("--model"),
+        worktree: flag("--worktree"),
       });
       console.error(`[session ${r.session.id}] native=${r.session.native}`);
+      if (r.session.worktreePath) {
+        console.error(`worktree: ${r.session.worktreePath} (branch ${r.session.worktreeBranch})`);
+      }
       render(r.events ?? []);
       console.error(`log: ${r.log}`);
       console.error(`continue with: orch send ${r.session.id} "<follow-up>"`);
@@ -226,6 +237,65 @@ async function main() {
       const { events } = await call("/stream", { sessionId, sinceSeq: Number(arg("--since") ?? 0) });
       for (const e of events as any[]) console.log(`${e.seq} ${JSON.stringify(e.event)}`);
       if (!(events as any[]).length) console.log("(no events)");
+      return;
+    }
+
+    case "compare": {
+      const prompt = pos.join(" ");
+      if (!prompt) {
+        console.error("usage: orch compare <prompt> [--models a,b,c] [--tool opencode]");
+        process.exit(1);
+      }
+      const models = (arg("--models") ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+      const r = await call("/compare", {
+        prompt,
+        models,
+        tool: arg("--tool") ?? "opencode",
+        cwd: arg("--cwd") ?? process.cwd(),
+        roots: [arg("--cwd") ?? process.cwd()],
+      });
+      for (const [i, x] of r.results.entries()) {
+        console.log(`--- ${i + 1}. ${x.model} ${x.ok ? "" : "(failed)"}`);
+        console.log(x.text || "(empty)");
+        console.log(`session ${x.sessionId}
+`);
+      }
+      return;
+    }
+
+    case "diff": {
+      const r = await call("/diff", { sessionId: pos[0], statOnly: flag("--stat") });
+      if (r.note) {
+        console.log(r.note);
+        return;
+      }
+      if (!r.files?.length) return console.log("(no changes)");
+      if (flag("--stat")) {
+        for (const f of r.files) console.log(`  ${f}`);
+        console.log(`${r.files.length} file(s) changed`);
+        return;
+      }
+      console.log(r.patch || "(no diff available; the agent may not have committed)");
+      return;
+    }
+
+    case "merge": {
+      const r = await call("/merge", { sessionId: pos[0], mode: flag("--ff") ? "merge" : "squash" });
+      console.log(r.result);
+      return;
+    }
+
+    case "discard": {
+      const r = await call("/discard", { sessionId: pos[0], force: flag("--force") });
+      console.log(r.removed ? "discarded" : `not discarded: ${r.reason}`);
+      return;
+    }
+
+    case "sweep": {
+      const r = await call("/sweep", { cwd: pos[0] ?? process.cwd() });
+      if (r.note) return console.log(r.note);
+      console.log(`removed ${r.removed.length}, kept ${r.skipped.length} (still held by live agents)`);
+      for (const p2 of r.removed) console.log(`  - ${p2}`);
       return;
     }
 

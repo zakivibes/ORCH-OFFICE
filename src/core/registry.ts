@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { Store } from "./db.js";
+import { WorktreeManager, type Worktree } from "./worktree.js";
 import { Policy, type NarrowRequest } from "../permissions/policy.js";
 import { ClaudeAdapter } from "../adapters/claude.js";
 import { AgyAdapter } from "../adapters/agy.js";
@@ -22,6 +23,8 @@ export interface OpenArgs {
   extraDirs?: string[];
   roots: string[];
   narrow?: NarrowRequest;
+  /** Create an isolated git worktree and run the agent inside it. */
+  worktree?: boolean;
 }
 
 export interface SendArgs {
@@ -38,6 +41,8 @@ export interface SendArgs {
  * next turn onward rather than retroactively.
  */
 export class Registry extends EventEmitter {
+  readonly worktrees = new WorktreeManager();
+  private worktreeFor = new Map<string, Worktree>();
   private adapters = new Map<string, Adapter>();
   private policies = new Map<string, Policy>();
   private handles = new Map<string, Handle>();
@@ -62,11 +67,31 @@ export class Registry extends EventEmitter {
     }
   }
 
-  async open(args: OpenArgs): Promise<{ handle: Handle; session: StoredSession }> {
-    const policy = new Policy({ projectDir: args.cwd, roots: args.roots }).narrow(args.narrow);
+  async open(args: OpenArgs): Promise<{ handle: Handle; session: StoredSession; worktree: Worktree | null }> {
+    // A worktree must exist before the agent spawns, because the agent's cwd
+    // is the worktree. On failure we fall back to the shared checkout rather
+    // than leaving the caller with nothing.
+    let worktree: Worktree | null = null;
+    let cwd = args.cwd;
+    if (args.worktree) {
+      try {
+        const repoRoot = await this.worktrees.repoRoot(args.cwd);
+        if (!repoRoot) throw new Error(`${args.cwd} is not inside a git repository`);
+        const id = randomUUID();
+        worktree = await this.worktrees.create(repoRoot, args.label || id.slice(0, 8), id);
+        cwd = worktree.path;
+      } catch (err) {
+        this.emit("warning", `worktree unavailable, sharing the checkout: ${err instanceof Error ? err.message : err}`);
+        worktree = null;
+        cwd = args.cwd;
+      }
+    }
+
+    const roots = worktree ? [...args.roots, worktree.path] : args.roots;
+    const policy = new Policy({ projectDir: cwd, roots }).narrow(args.narrow);
     const adapter = this.build(args.tool, policy);
     const handle = await adapter.spawn({
-      cwd: args.cwd,
+      cwd,
       model: args.model,
       extraDirs: args.extraDirs,
     });
@@ -85,15 +110,51 @@ export class Registry extends EventEmitter {
       rootPid: null,
       totals: zeroUsage(),
       costUsd: 0,
+      worktreePath: worktree?.path ?? null,
+      worktreeBranch: worktree?.branch ?? null,
+      repoRoot: worktree?.repoRoot ?? null,
     };
     this.store.insertSession(session);
     this.adapters.set(handle.id, adapter);
     this.policies.set(handle.id, policy);
     this.handles.set(handle.id, handle);
+    if (worktree) this.worktreeFor.set(handle.id, worktree);
     this.store.updateNative(handle.id, handle.native, handle.model);
 
     this.emit("session", session);
-    return { handle, session };
+    return { handle, session, worktree };
+  }
+
+  worktree(sessionId: string): Worktree | null {
+    const s = this.store.getSession(sessionId);
+    if (!s?.worktreePath || !s.worktreeBranch || !s.repoRoot) return null;
+    return {
+      path: s.worktreePath,
+      branch: s.worktreeBranch,
+      repoRoot: s.repoRoot,
+      sessionId,
+      createdAt: 0,
+    };
+  }
+
+  async diff(sessionId: string, statOnly = false) {
+    const wt = this.worktree(sessionId);
+    if (!wt) return null;
+    const files = await this.worktrees.changedFiles(wt);
+    if (statOnly) return { files, patch: "" };
+    return { files, patch: await this.worktrees.diff(wt) };
+  }
+
+  async merge(sessionId: string, mode: "squash" | "merge" = "squash") {
+    const wt = this.worktree(sessionId);
+    if (!wt) throw new Error(`session ${sessionId} has no worktree`);
+    return this.worktrees.merge(wt, mode);
+  }
+
+  async discard(sessionId: string, force = false) {
+    const wt = this.worktree(sessionId);
+    if (!wt) return { removed: false, reason: "session has no worktree" };
+    return this.worktrees.discard(wt, force);
   }
 
   async *send(args: SendArgs): AsyncGenerator<Event> {

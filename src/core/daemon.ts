@@ -23,7 +23,7 @@ export interface DaemonInfo {
   build: string;
 }
 
-export const BUILD_ID = "0.3.2";
+export const BUILD_ID = "0.5.2";
 
 export function readDaemon(): DaemonInfo | null {
   try {
@@ -121,6 +121,22 @@ export function startDaemon(port = DEFAULT_PORT): DaemonInfo {
   const store = new Store();
   const registry = new Registry(store);
 
+  // Recover from an unclean exit: worktrees whose owning process is gone would
+  // otherwise leak forever, since nothing else runs after a crash.
+  void (async () => {
+    for (const s of store.listSessions(true)) {
+      if (!s.repoRoot) continue;
+      try {
+        const r = await registry.worktrees.sweep(s.repoRoot);
+        if (r.removed.length) {
+          process.stderr.write(`swept ${r.removed.length} stale worktree(s)\n`);
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+  })();
+
   const server = createServer((req, res) => {
     handle(req, res, { store, registry }).catch((err) => {
       json(res, 500, { error: err instanceof Error ? err.message : String(err) });
@@ -199,6 +215,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
         label: body.label as string | undefined,
         model: body.model as string | undefined,
         narrow: body.narrow as NarrowRequest | undefined,
+        worktree: body.worktree === true,
       });
       if (body.prompt) {
         const events = await collect(ctx, session.id, String(body.prompt));
@@ -229,6 +246,70 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
       if (!s) return json(res, 404, { error: "no such session" });
       const caps = ctx.registry.adapterFor(s.id)?.caps;
       return json(res, 200, { session: s, caps, policy: ctx.registry.policyFor(s.id)?.describe() });
+    }
+
+    case "/diff": {
+      const sessionId = String(body.sessionId);
+      const statOnly = body.statOnly === true;
+      const d = await ctx.registry.diff(sessionId, statOnly);
+      if (!d) return json(res, 200, { files: [], patch: "", note: "session has no worktree" });
+      return json(res, 200, d);
+    }
+
+    case "/merge": {
+      const sessionId = String(body.sessionId);
+      const mode = body.mode === "merge" ? "merge" : "squash";
+      const result = await ctx.registry.merge(sessionId, mode);
+      return json(res, 200, { result });
+    }
+
+    case "/discard": {
+      const sessionId = String(body.sessionId);
+      const r = await ctx.registry.discard(sessionId, body.force === true);
+      return json(res, 200, r);
+    }
+
+    /**
+     * Run one prompt against several models at the same time. Model diversity
+     * is the point: asking a single model twice converges on its own bias, so
+     * a second opinion has to come from a different model.
+     */
+    case "/compare": {
+      const prompt = String(body.prompt ?? "");
+      const models = Array.isArray(body.models) ? (body.models as string[]) : [];
+      const tool = (String(body.tool ?? "opencode") as ToolId);
+      const cwd = String(body.cwd ?? process.cwd());
+      const roots = (body.roots as string[]) ?? [cwd];
+
+      const run = async (model: string) => {
+        try {
+          const { session } = await ctx.registry.open({ tool, cwd, roots, model, label: `cmp-${model.split("/").pop()}` });
+          const events = await collect(ctx, session.id, prompt);
+          const text = events
+            .filter((e) => e.t === "text.delta")
+            .map((e) => (e as { text: string }).text)
+            .join("");
+          const err = events.find((e) => e.t === "error") as { t: "error"; message: string } | undefined;
+          return { model, ok: !err, text: err ? err.message : text, sessionId: session.id };
+        } catch (err) {
+          return {
+            model,
+            ok: false,
+            text: err instanceof Error ? err.message : String(err),
+            sessionId: "",
+          };
+        }
+      };
+
+      const results = await Promise.all(models.map(run));
+      return json(res, 200, { results });
+    }
+
+    case "/sweep": {
+      const cwd = String(body.cwd ?? process.cwd());
+      const repoRoot = await ctx.registry.worktrees.repoRoot(cwd);
+      if (!repoRoot) return json(res, 200, { removed: [], skipped: [], note: "not a git repository" });
+      return json(res, 200, await ctx.registry.worktrees.sweep(repoRoot));
     }
 
     case "/interrupt":

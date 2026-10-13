@@ -15,6 +15,49 @@ ln -sf ~/orchestrator/dist/cli/main.js ~/.local/bin/orch
 claude mcp add --scope user orchestrator -- node ~/orchestrator/dist/mcp/run.js
 ```
 
+## Parallel agents: worktree isolation
+
+Two agents editing the same checkout overwrite each other. Give each session
+its own git worktree:
+
+```bash
+orch open agy "refactor auth" --worktree --label auth &
+orch open agy "add pagination" --worktree --label page &
+orch diff <id> --stat        # what did it change?
+orch diff <id>               # full patch, for review
+orch merge <id>              # squash into the base branch
+orch discard <id>            # throw the work away
+orch sweep                   # reclaim trees orphaned by dead agents
+```
+
+`--worktree` creates `.orch/<label>` on branch `orch/<label>` and runs the
+agent inside it. `orch diff` compares against the base **working tree**, not
+`HEAD`, because agents usually edit without committing — diffing `base...HEAD`
+reports "no changes" for an agent that did exactly what you asked.
+
+`orch merge` commits the agent's uncommitted work on the branch first, then
+squashes, because `git merge --squash` only sees commits.
+
+Safety properties:
+- A discarded run costs one `git worktree remove`; the main branch is untouched.
+- A lock file (`.orch-lock`) records the owning pid. `discard` refuses while a
+  live agent holds the tree; `sweep` removes trees whose owner is gone and runs
+  automatically at daemon start, so a crash cannot leak worktrees forever.
+- `.orch/` and `.orch-lock` are written to `.git/info/exclude`, so bookkeeping
+  never lands in an agent's commit.
+
+A worktree isolates **files**, not ports, databases or background processes.
+Two agents both binding :3000 will still collide.
+
+## Cross-model comparison
+
+```bash
+orch compare "what makes a good commit message?" --models opencode/space-bunny-free,opencode/big-pickle
+```
+
+Or `orch_compare` over MCP. Asking one model twice converges on its own bias,
+so a second opinion has to come from a different model.
+
 ## Models
 
 `orch_models` (MCP) and `orch models [filter]` list what opencode can actually
@@ -127,9 +170,11 @@ agy reports tokens only, so its cost reads `$0.0000`.
 npm test
 ```
 
-20 tests: permission precedence and narrowing, rule-glob anchoring, root
-confinement, the async-queue early-exit regression, NDJSON parsing, store
-round-trips, and fixture replays of real captured claude/agy streams.
+35 tests: permission precedence and narrowing, rule-glob anchoring, root
+confinement, the async-queue and coalescer regressions, NDJSON parsing, store
+round-trips, fixture replays of real captured claude/agy streams, and worktree
+behaviour (isolation, uncommitted diffs, squash-merge, lock refusal, stale
+sweep, branch-name sanitising against `git check-ref-format`).
 
 ## Known limits
 

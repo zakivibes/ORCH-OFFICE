@@ -14,6 +14,7 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
+    this.addMissingColumns();
   }
 
   private migrate() {
@@ -30,7 +31,10 @@ export class Store {
         closed_at INTEGER,
         root_pid INTEGER,
         totals TEXT NOT NULL,
-        cost_usd REAL NOT NULL DEFAULT 0
+        cost_usd REAL NOT NULL DEFAULT 0,
+        worktree_path TEXT,
+        worktree_branch TEXT,
+        repo_root TEXT
       );
 
       CREATE TABLE IF NOT EXISTS turns (
@@ -56,11 +60,25 @@ export class Store {
     `);
   }
 
+  /** Additive migrations for databases created by an earlier build. */
+  private addMissingColumns() {
+    const have = new Set(
+      (this.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    for (const [name, ddl] of [
+      ["worktree_path", "ALTER TABLE sessions ADD COLUMN worktree_path TEXT"],
+      ["worktree_branch", "ALTER TABLE sessions ADD COLUMN worktree_branch TEXT"],
+      ["repo_root", "ALTER TABLE sessions ADD COLUMN repo_root TEXT"],
+    ] as const) {
+      if (!have.has(name)) this.db.exec(ddl);
+    }
+  }
+
   insertSession(s: StoredSession) {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, tool, native, cwd, model, label, created_at, updated_at, closed_at, root_pid, totals, cost_usd)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO sessions (id, tool, native, cwd, model, label, created_at, updated_at, closed_at, root_pid, totals, cost_usd, worktree_path, worktree_branch, repo_root)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         s.id,
@@ -75,6 +93,9 @@ export class Store {
         s.rootPid,
         JSON.stringify(s.totals),
         s.costUsd,
+        s.worktreePath ?? null,
+        s.worktreeBranch ?? null,
+        s.repoRoot ?? null,
       );
   }
 
@@ -205,5 +226,8 @@ function mapSession(r: Record<string, unknown>): StoredSession {
     rootPid: r.root_pid === null ? null : Number(r.root_pid),
     totals: JSON.parse(String(r.totals)) as Usage,
     costUsd: Number(r.cost_usd),
+    worktreePath: r.worktree_path === null || r.worktree_path === undefined ? null : String(r.worktree_path),
+    worktreeBranch: r.worktree_branch === null || r.worktree_branch === undefined ? null : String(r.worktree_branch),
+    repoRoot: r.repo_root === null || r.repo_root === undefined ? null : String(r.repo_root),
   };
 }

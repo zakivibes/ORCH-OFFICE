@@ -38,6 +38,11 @@ const TOOLS = [
           description:
             "Optional. For opencode use provider/model, e.g. openrouter/anthropic/claude-haiku-latest.",
         },
+        worktree: {
+          type: "boolean",
+          description:
+            "Isolate the agent in its own git worktree so parallel agents cannot overwrite each other's files. Review with orch_diff, then orch_merge or orch_discard.",
+        },
         deny: {
           type: "array",
           items: { type: "string" },
@@ -98,6 +103,57 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "orch_diff",
+    description:
+      "Show what a session's agent actually changed, as a unified diff. Only meaningful for sessions opened with worktree=true. Review before merging.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" }, statOnly: { type: "boolean" } },
+      required: ["sessionId"],
+    },
+  },
+  {
+    name: "orch_merge",
+    description:
+      "Merge a session's worktree branch back into the base branch. Squashes by default; pass mode='merge' to keep history. Uncommitted agent work is committed on the branch first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        mode: { type: "string", enum: ["squash", "merge"] },
+      },
+      required: ["sessionId"],
+    },
+  },
+  {
+    name: "orch_discard",
+    description: "Delete a session's worktree and branch, throwing away its work.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" }, force: { type: "boolean" } },
+      required: ["sessionId"],
+    },
+  },
+  {
+    name: "orch_compare",
+    description:
+      "Run the same prompt against several models at once and return each answer, for cross-model validation. Uses model diversity deliberately: one model answering twice converges on its own bias.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string" },
+        models: {
+          type: "array",
+          items: { type: "string" },
+          description: "e.g. ['opencode/space-bunny-free','opencode/big-pickle']. Defaults to a few Zen models.",
+        },
+        tool: { type: "string", enum: ["opencode", "agy", "claude"], default: "opencode" },
+        cwd: { type: "string" },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
     name: "orch_models",
     description:
       "List the models opencode can currently reach, so you can pick one before calling orch_open. Filter with a substring such as 'zen', 'muse' or 'space-bunny'.",
@@ -117,11 +173,11 @@ function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
 
-function truncate(s: string): string {
+function truncate(s: string, cap = MAX_INLINE_CHARS): string {
   const t = s.trim();
   if (!t) return "(no text)";
-  if (t.length <= MAX_INLINE_CHARS) return t;
-  return `${t.slice(0, MAX_INLINE_CHARS)}\n... [truncated ${t.length - MAX_INLINE_CHARS} chars — see the log]`;
+  if (t.length <= cap) return t;
+  return `${t.slice(0, cap)}\n... [truncated ${t.length - cap} chars — see the log]`;
 }
 
 function renderEvents(events: Event[]): string {
@@ -144,20 +200,60 @@ export async function startMcpServer(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const name = req.params.name;
     const a = (req.params.arguments ?? {}) as Record<string, unknown>;
+
+    // MCP progress tokens let the client follow a long turn. Claude Code also
+    // aborts a stdio tool call that goes silent for 30 minutes, so a long
+    // orch_send should say something while it works.
+    const meta = (req.params._meta ?? {}) as { progressToken?: string | number };
+    const token = meta.progressToken;
+    let lastSent = 0;
+    const started = Date.now();
+    const report = (message: string) => {
+      if (token === undefined) return;
+      const now = Date.now();
+      if (now - lastSent < 1500) return; // rate-limit per spec guidance
+      lastSent = now;
+      void server
+        .notification({
+          method: "notifications/progress",
+          params: {
+            progressToken: token,
+            progress: Math.round((now - started) / 1000),
+            message,
+          },
+        })
+        .catch(() => {
+          /* the client may not listen; progress is advisory */
+        });
+    };
+
     try {
       switch (name) {
         case "orch_open": {
-          const r = await client.open({
-            tool: String(a.tool),
-            cwd: a.cwd ? String(a.cwd) : projectDir,
-            roots: rootList,
-            prompt: String(a.prompt ?? ""),
-            label: a.label,
-            model: a.model,
-            narrow: { deny: a.deny, disableTools: a.disableTools },
-          });
+          report("spawning agent session");
+          // Spawning plus the first turn can run for minutes; say something
+          // periodically so the client does not think the call has hung.
+          const spawnBeat = setInterval(() => report("agent working..."), 10_000);
+          let r: Awaited<ReturnType<typeof client.open>>;
+          try {
+            r = await client.open({
+              tool: String(a.tool),
+              cwd: a.cwd ? String(a.cwd) : projectDir,
+              roots: rootList,
+              prompt: String(a.prompt ?? ""),
+              label: a.label,
+              model: a.model,
+              narrow: { deny: a.deny, disableTools: a.disableTools },
+              worktree: a.worktree === true,
+            });
+          } finally {
+            clearInterval(spawnBeat);
+          }
           return text(
             `session ${r.session.id}  tool=${r.session.tool}  native=${r.session.native}\n` +
+              (r.session.worktreePath
+                ? `worktree ${r.session.worktreePath} (branch ${r.session.worktreeBranch})\n`
+                : "") +
               `${truncate(renderEvents(r.events ?? []))}\n` +
               `log: ${r.log}\n` +
               `This session stays live. Continue with orch_send using sessionId ${r.session.id}.`,
@@ -165,11 +261,18 @@ export async function startMcpServer(): Promise<void> {
         }
 
         case "orch_send": {
-          const r = await client.send({
-            sessionId: String(a.sessionId),
-            prompt: String(a.prompt ?? ""),
-            waitMs: Number(a.waitMs ?? 600_000),
-          });
+          report("turn started");
+          const heartbeat = setInterval(() => report("agent working..."), 10_000);
+          let r: { events: Event[]; log: string };
+          try {
+            r = await client.send({
+              sessionId: String(a.sessionId),
+              prompt: String(a.prompt ?? ""),
+              waitMs: Number(a.waitMs ?? 600_000),
+            });
+          } finally {
+            clearInterval(heartbeat);
+          }
           const err = (r.events ?? []).find((e) => e.t === "error");
           if (err && err.t === "error") {
             return text(
@@ -233,6 +336,47 @@ export async function startMcpServer(): Promise<void> {
         case "orch_roots": {
           const r = await client.roots({ cwd: projectDir, roots: rootList });
           return text(r.policy);
+        }
+
+        case "orch_diff": {
+          const r = await client.diff({ sessionId: String(a.sessionId), statOnly: a.statOnly === true });
+          if (r.note) return text(r.note);
+          if (!r.files.length) return text("No changes.");
+          const body = a.statOnly
+            ? r.files.map((f) => `  ${f}`).join("\n")
+            : (r.patch || "(no diff available)");
+          return text(truncate(`${r.files.length} file(s) changed:\n${body}`));
+        }
+
+        case "orch_merge": {
+          const r = await client.merge({
+            sessionId: String(a.sessionId),
+            mode: a.mode === "merge" ? "merge" : "squash",
+          });
+          return text(r.result);
+        }
+
+        case "orch_discard": {
+          const r = await client.discard({ sessionId: String(a.sessionId), force: a.force === true });
+          return text(r.removed ? "Discarded." : `Not discarded: ${r.reason}`);
+        }
+
+        case "orch_compare": {
+          const models = Array.isArray(a.models) && a.models.length
+            ? (a.models as string[])
+            : [
+                "opencode/space-bunny-free",
+                "opencode/big-pickle",
+                "opencode/muse-spark-1.3-contributor-free",
+              ];
+          const r = await client.call<{ results: Array<{ model: string; ok: boolean; text: string; sessionId: string }> }>(
+            "/compare",
+            { prompt: String(a.prompt), models, tool: a.tool ?? "opencode", cwd: a.cwd ?? projectDir, roots: rootList },
+          );
+          const body = r.results
+            .map((x, i) => `--- ${i + 1}. ${x.model} ---\n${x.ok ? truncate(x.text, 2000) : `ERROR: ${x.text}`}\nsession ${x.sessionId}`)
+            .join("\n\n");
+          return text(truncate(body));
         }
 
         case "orch_models": {
