@@ -300,7 +300,14 @@ function drawDesk(e, i) {
 
 function bubble(w, cx, cy, phase) {
   let t = '', col = '#eceaff';
-  if (w.state === 'working') { const f = w.feed.filter((e) => e.kind === 'tool').pop(); t = f ? `${TOOL_ICON[f.name] || '⚙️'} ${f.name}` : '💭 thinking'; }
+  if (w.state === 'working') {
+    // Show whatever the worker did last: a tool call, or (for workers whose tool calls are not
+    // streamed) its latest words. Only fall back to "thinking" when there is neither.
+    const f = w.feed.filter((e) => e.kind === 'tool' || e.kind === 'say').pop();
+    t = !f ? '💭 thinking' : f.kind === 'tool' ? `${TOOL_ICON[f.name] || '⚙️'} ${f.name}`
+      : `💬 ${f.detail.length > 26 ? f.detail.slice(0, 25) + '…' : f.detail}`;
+    if (w.stalled) { t = `⚠️ quiet ${ago(w.lastAt).replace(' ago', '')}`; col = '#ffd166'; }
+  }
   else if (w.state === 'idle') { t = '💤' + ' z'.repeat(1 + ((phase >> 4) % 3)); col = '#a19ec8'; }
   else if (w.state === 'error') { t = '❗ error'; col = '#ff4d6d'; }
   else return;
