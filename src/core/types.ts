@@ -34,6 +34,8 @@ export type Event =
   | { t: "tool.result"; id: string; ok: boolean; output: string }
   | { t: "permission.request"; id: string; tool: string; input: unknown }
   | { t: "turn.completed"; usage: Usage; costUsd?: number; durationMs: number; turns: number }
+  /** One model step's own usage, emitted as it lands so dashboards can count mid-turn. */
+  | { t: "usage.step"; usage: Usage }
   | {
       t: "error";
       kind: "rate_limit" | "api" | "crash";

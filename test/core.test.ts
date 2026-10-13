@@ -141,6 +141,25 @@ test("agy fixture matches the verified init/step_update/result shape", async () 
   assert.ok("input_tokens" in result.result.usage);
 });
 
+test("agy 1.3 tool steps say \"tool\" and per-step usage sums to the result", async () => {
+  // Captured from agy 1.3.x running ls + view_file. The adapter relies on both facts:
+  // step_type "tool" (not tool_call/tool_use) and each DONE step carrying its own usage.
+  const fixture = join(FIXTURES, "agy-tool-turn.ndjson");
+  const text = (await import("node:fs")).readFileSync(fixture, "utf8");
+  const records = text.trim().split("\n").map((l) => JSON.parse(l));
+  const done = records.filter((r) => r.event === "step_update" && r.step_update.state === "DONE").map((r) => r.step_update);
+
+  const tools = done.filter((s) => s.step_type === "tool");
+  assert.deepEqual(tools.map((s) => s.tool_name), ["run_command", "view_file"]);
+  assert.equal(tools[0].tool_info.parameters.CommandLine, "ls");
+
+  const sum = (k: string) => done.reduce((a, s) => a + Number(s.usage?.[k] ?? 0), 0);
+  const result = records.find((r) => r.event === "result").result.usage;
+  for (const k of ["input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens"]) {
+    assert.equal(sum(k), result[k], k);
+  }
+});
+
 test("store round-trips sessions, turns and events", () => {
   const store = scratchDb();
   const id = "sess-1";

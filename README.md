@@ -75,15 +75,32 @@ The MCP server starts the daemon on demand (`127.0.0.1:47811`). State lives in `
 
 A local, read-only pixel office for watching your workers. Each worker gets a desk: green screen = working,
 💤 = idle, ☕ = rate-limited (off to the coffee machine), red screen = error. When a turn finishes the worker
-walks its report over to the coordinator. Click a worker (or press <kbd>Tab</kbd>) to inspect its task, live tool
-feed and last reply.
+walks its report over to the coordinator.
+
+Switch to **📊 Dashboard** for live tracking and counting:
+
+<p align="center"><img src="docs/dashboard.png" alt="ORCH OFFICE live dashboard" width="900"/></p>
+
+- **Live turns**: one card per running turn with a ticking clock, steps, tool calls, tokens so far and tokens/min.
+  A worker that has gone quiet for 10+ minutes (`ORCH_STALL_MINUTES`) is flagged.
+- **Every worker in one sortable table**: turns, tool calls, processed / generated / fresh / cached tokens and a
+  per-turn trend line, with team totals. **⬇ CSV** exports it.
+- **Totals by worker type** and **tool calls by type** across the team.
+- **Inspect panel** (click any worker): Overview (live turn, token split, tool breakdown), Activity (tool calls and
+  what the worker said, filterable), Turns (per-turn duration and tokens), Files (what it edited), Orders.
+- **Window**: count only who is on shift, or the last 1 h to 7 days. Pause freezes the view.
+- Deep links: `?view=dash&w=<session-id-prefix>&tab=files`.
+
+Token counts for opencode workers are read live from opencode's own ledger (every step, even mid-turn); agy
+reports per step and per turn. "Processed" includes cached input, which is the conversation re-read on every step
+and dominates long agentic turns; "generated" is what the model actually wrote.
 
 ```bash
 npm run office          # your real workers → http://localhost:4747
 npm run office:demo     # preview with sample workers
 ```
 
-It opens `~/.orchestrator/orch.db` read-only and never writes to it.
+It opens `~/.orchestrator/orch.db` (and opencode's database, if present) read-only and never writes to either.
 
 ## 🧰 MCP tools
 

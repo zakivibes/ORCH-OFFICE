@@ -6,6 +6,7 @@ import { readJsonLines, drain } from "./ndjson.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import {
   zeroUsage,
+  addUsage,
   type Adapter,
   type AdapterCaps,
   type Event,
@@ -145,7 +146,7 @@ export class AgyAdapter implements Adapter {
     // Input envelope shape verified against agy 1.3.4.
     this.write(handle.id, { event: "user", message: { content: prompt } });
 
-    const usage: Usage = zeroUsage();
+    let usage: Usage = zeroUsage();
     const coalescer = new DeltaCoalescer(40, (t) => entry.raw.push(normalized({ t: "text.delta", text: t })));
     let turns = 0;
     let sawText = false;
@@ -178,14 +179,20 @@ export class AgyAdapter implements Adapter {
           const stepType = String(su.step_type ?? "");
           const stepIndex = Number(su.step_index ?? 0);
 
-          if (su.usage) {
+          // Each model step reports its OWN usage (verified on agy 1.3.x: the result's usage
+          // is the sum of the steps). Sum them so the total is right even if no result
+          // arrives, and surface each step so dashboards can count mid-turn.
+          if (su.usage && state === "DONE") {
             const u = su.usage as Record<string, unknown>;
-            Object.assign(usage, {
+            const step: Usage = {
               inputTokens: Number(u.input_tokens ?? 0),
               outputTokens: Number(u.output_tokens ?? 0),
               thinkingTokens: Number(u.thinking_tokens ?? 0),
               cacheReadTokens: Number(u.cache_read_tokens ?? 0),
-            });
+              cacheWriteTokens: 0,
+            };
+            usage = addUsage(usage, step);
+            yield { t: "usage.step", usage: step };
           }
 
           // agy is inconsistent about where the text lands: some turns stream
@@ -197,13 +204,18 @@ export class AgyAdapter implements Adapter {
           if (state === "DONE") {
             const flushed = coalescer.flush();
             if (flushed) yield { t: "text.delta", text: flushed };
-            if (stepType === "tool_call" || stepType === "tool_use") {
+            // agy 1.3.x labels tool steps "tool"; older builds used tool_call/tool_use.
+            if (stepType === "tool" || stepType === "tool_call" || stepType === "tool_use") {
+              const info = (su.tool_info ?? {}) as Record<string, unknown>;
               yield {
                 t: "tool.call",
                 id: `${stepIndex}`,
-                name: String(su.tool_name ?? su.step_type),
-                input: su,
+                name: String(su.tool_name ?? info.name ?? su.step_type),
+                input: { tool_info: { name: info.name, parameters: info.parameters } },
               };
+              if (info.output !== undefined) {
+                yield { t: "tool.result", id: `${stepIndex}`, ok: true, output: String(info.output).slice(0, 2000) };
+              }
             }
           }
           continue;
@@ -212,6 +224,8 @@ export class AgyAdapter implements Adapter {
         if (event === "result") {
           const res = (r.result ?? {}) as Record<string, unknown>;
           const u = (res.usage ?? {}) as Record<string, unknown>;
+          // The result's own total is authoritative when present.
+          usage = { ...usage };
           Object.assign(usage, {
             inputTokens: Number(u.input_tokens ?? usage.inputTokens),
             outputTokens: Number(u.output_tokens ?? usage.outputTokens),

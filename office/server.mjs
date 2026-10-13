@@ -1,5 +1,7 @@
-// ORCH OFFICE — a tiny local "IT company" view of the orchestrator's workers.
-// Read-only: opens ~/.orchestrator/orch.db with readOnly and never writes to it.
+// ORCH OFFICE — a tiny local "IT company" view of the orchestrator's workers, plus a live
+// dashboard for tracking and counting what they do.
+// Read-only: opens ~/.orchestrator/orch.db (and opencode's own db, if present) with readOnly and
+// never writes to either.
 // Run: npm run office   then open http://localhost:4747  (ORCH_DB=<path> to read another db)
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -11,27 +13,29 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4747);
 const DB_PATH = process.env.ORCH_DB ?? join(homedir(), '.orchestrator', 'orch.db');
-const WINDOW_MS = Number(process.env.ARCADE_WINDOW_HOURS ?? 12) * 3600_000;
+const DEFAULT_HOURS = Number(process.env.ARCADE_WINDOW_HOURS ?? 12);
 // opencode keeps every step's token count in its own database. Read it directly: it is the
 // authoritative figure for opencode workers, and unlike orch.db it updates while a turn runs.
 const OPENCODE_DB = process.env.OPENCODE_DB ?? join(homedir(), '.local', 'share', 'opencode', 'opencode.db');
-
-function db() {
-    // A fresh read-only handle per request: the daemon writes in WAL mode, and a
-    // short-lived reader always sees the latest committed events.
-    return new DatabaseSync(DB_PATH, { readOnly: true });
-}
+// A working session with no event for this long is flagged as possibly stalled.
+const STALL_MS = Number(process.env.ORCH_STALL_MINUTES ?? 10) * 60_000;
 
 const parse = (s, d = {}) => { try { return JSON.parse(s); } catch { return d; } };
-
 const ZERO = () => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0 });
+const add = (a, b) => {
+    const o = ZERO();
+    for (const k of Object.keys(o)) o[k] = Number(a?.[k] ?? 0) + Number(b?.[k] ?? 0);
+    return o;
+};
 
-function openOpencode() {
-    try { return new DatabaseSync(OPENCODE_DB, { readOnly: true }); } catch { return null; }
+function open(path) {
+    // A fresh read-only handle per request: the writers use WAL, and a short-lived reader always
+    // sees the latest committed rows.
+    try { return new DatabaseSync(path, { readOnly: true }); } catch { return null; }
 }
 
-// Sum the assistant messages of one opencode session, optionally only those created since `sinceMs`.
-function opencodeUsage(oc, nativeId, sinceMs = 0) {
+// Sum the assistant messages of one opencode session in [from, to).
+function opencodeUsage(oc, nativeId, from = 0, to = Number.MAX_SAFE_INTEGER) {
     const row = oc.prepare(`
         SELECT COUNT(*) AS steps,
                COALESCE(SUM(json_extract(data, '$.tokens.input')), 0)       AS input,
@@ -41,7 +45,8 @@ function opencodeUsage(oc, nativeId, sinceMs = 0) {
                COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0) AS cacheWrite,
                COALESCE(SUM(json_extract(data, '$.cost')), 0)               AS cost
           FROM message
-         WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant' AND time_created >= ?`).get(nativeId, sinceMs);
+         WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
+           AND time_created >= ? AND time_created < ?`).get(nativeId, from, to);
     return {
         steps: Number(row.steps),
         usage: {
@@ -54,96 +59,178 @@ function opencodeUsage(oc, nativeId, sinceMs = 0) {
 
 function summariseInput(input) {
     if (!input || typeof input !== 'object') return '';
+    const p = input.tool_info?.parameters ?? {};
     const pick = input.command ?? input.filePath ?? input.AbsolutePath ?? input.pattern ?? input.path
-        ?? input.tool_info?.parameters?.CommandLine ?? input.tool_info?.parameters?.AbsolutePath ?? '';
-    return String(pick).replace(/^"|"$/g, '').replace(homedir(), '~').slice(0, 140);
+        ?? p.CommandLine ?? p.AbsolutePath ?? p.TargetFile ?? p.SearchPath ?? p.Query ?? p.Pattern ?? '';
+    return String(pick).replace(/^"|"$/g, '').replace(homedir(), '~').slice(0, 160);
 }
 
-function workers() {
-    const h = db();
-    const oc = openOpencode();
+// Paths a tool call changed (edits/writes), so the panel can list the files a worker touched.
+const WRITE_TOOLS = /^(edit|write|multiedit|patch|write_to_file|replace_file_content|multi_replace_file_content|create_file)$/i;
+function touchedPath(name, input) {
+    if (!WRITE_TOOLS.test(String(name))) return null;
+    const p = input?.tool_info?.parameters ?? {};
+    const path = input?.filePath ?? input?.path ?? p.TargetFile ?? p.AbsolutePath ?? p.FilePath;
+    return path ? String(path).replace(homedir(), '~') : null;
+}
+
+function worker(h, oc, s, now) {
+    const turns = h.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id').all(s.id);
+    const lastTurn = turns[turns.length - 1];
+    const running = !!lastTurn && lastTurn.ended_at == null && !s.closed_at;
+
+    // Exact tool-call counts over the whole session (adapters emit one record per state change,
+    // so count distinct ids per tool name).
+    const breakdown = {};
+    let toolCalls = 0;
+    for (const r of h.prepare(`
+            SELECT json_extract(payload, '$.name') AS name, COUNT(DISTINCT json_extract(payload, '$.id')) AS n
+              FROM events WHERE session_id = ? AND json_extract(payload, '$.t') = 'tool.call'
+             GROUP BY name ORDER BY n DESC`).all(s.id)) {
+        breakdown[String(r.name)] = Number(r.n);
+        toolCalls += Number(r.n);
+    }
+
+    const events = h.prepare('SELECT seq, at, payload FROM events WHERE session_id = ? ORDER BY seq DESC LIMIT 600')
+        .all(s.id).reverse().map((e) => ({ seq: e.seq, at: e.at, ev: parse(e.payload) }));
+
+    // Activity feed: tool calls (collapsed per id), what the worker said, errors, turn ends.
+    const feed = [];
+    const seenTool = new Set();
+    const files = new Map();
+    let say = null;
+    const flushSay = () => {
+        if (say && say.text.trim()) {
+            const lines = say.text.trim().split('\n').filter(Boolean);
+            feed.push({ kind: 'say', at: say.at, name: 'said', detail: lines[lines.length - 1].slice(0, 220) });
+        }
+        say = null;
+    };
+    for (const { at, ev } of events) {
+        if (ev.t === 'text.delta') {
+            if (!say) say = { at, text: '' };
+            say.text += ev.text; say.at = at;
+            continue;
+        }
+        if (ev.t === 'usage.step' || ev.t === 'tool.result' || ev.t === 'thinking.delta') continue;
+        flushSay();
+        if (ev.t === 'tool.call') {
+            const sum = summariseInput(ev.input);
+            const f = touchedPath(ev.name, ev.input);
+            if (f) files.set(f, at);
+            if (seenTool.has(ev.id) && !sum) continue;
+            seenTool.add(ev.id);
+            const last = feed[feed.length - 1];
+            if (last && last.id === ev.id) { last.detail = sum || last.detail; continue; }
+            feed.push({ kind: 'tool', id: ev.id, at, name: ev.name, detail: sum });
+        } else if (ev.t === 'error') {
+            feed.push({ kind: 'error', at, name: ev.kind, detail: String(ev.message ?? '').slice(0, 300) });
+        } else if (ev.t === 'turn.completed') {
+            feed.push({ kind: 'done', at, name: 'turn completed', detail: '' });
+        } else if (ev.t === 'permission.request') {
+            feed.push({ kind: 'perm', at, name: 'permission', detail: String(ev.tool ?? '') });
+        }
+    }
+    flushSay();
+
+    // Usage: opencode's own ledger when readable (live, every step), else orch's records, plus
+    // agy's per-step usage events for a turn still running.
+    let usageSource = 'orch';
+    let totals = { ...ZERO(), ...parse(s.totals) };
+    let costUsd = Number(s.cost_usd ?? 0);
+    const useOc = s.tool === 'opencode' && s.native && oc;
+    const turnRows = turns.map((t, i) => {
+        let usage = { ...ZERO(), ...parse(t.usage) };
+        let steps = null;
+        if (useOc) {
+            try {
+                const u = opencodeUsage(oc, s.native, t.started_at, t.ended_at ?? Number.MAX_SAFE_INTEGER);
+                if (u.steps > 0) { usage = u.usage; steps = u.steps; }
+            } catch { /* fall back to orch's figure */ }
+        }
+        return {
+            n: i + 1, startedAt: t.started_at, endedAt: t.ended_at, aborted: !!t.aborted,
+            durationMs: (t.ended_at ?? now) - t.started_at, usage, steps,
+            prompt: String(t.prompt).slice(0, 300),
+        };
+    });
+    if (useOc) {
+        try {
+            const all = opencodeUsage(oc, s.native);
+            if (all.steps > 0) { totals = all.usage; costUsd = all.costUsd; usageSource = 'opencode'; }
+        } catch { /* schema drift or locked db */ }
+    }
+
+    // The running turn: elapsed, steps, tool calls and tokens so far.
+    let current = null;
+    if (running) {
+        const since = lastTurn.started_at;
+        const turnEvents = events.filter((e) => e.at >= since);
+        const callIds = new Set(turnEvents.filter((e) => e.ev.t === 'tool.call').map((e) => e.ev.id));
+        let usage = ZERO(), steps = 0, source = 'none';
+        if (usageSource === 'opencode') {
+            const u = turnRows[turnRows.length - 1];
+            usage = u.usage; steps = u.steps ?? 0; source = 'opencode';
+        } else {
+            for (const e of turnEvents) if (e.ev.t === 'usage.step') { usage = add(usage, e.ev.usage); steps++; }
+            if (steps) {
+                source = 'steps';
+                // fold the running turn into the session totals so the header counts it too
+                totals = add(totals, usage);
+            }
+        }
+        const elapsed = now - since;
+        const tokens = Object.values(usage).reduce((a, b) => a + b, 0);
+        current = {
+            startedAt: since, elapsedMs: elapsed, steps, toolCalls: callIds.size, usage, source,
+            tokensPerMin: elapsed > 0 ? Math.round(tokens / (elapsed / 60_000)) : 0,
+        };
+    }
+
+    const lastEv = events[events.length - 1]?.ev;
+    const lastAt = events[events.length - 1]?.at ?? s.updated_at;
+    let state = 'idle';
+    if (s.closed_at) state = 'gone';
+    else if (lastEv?.t === 'error') state = /rate/i.test(lastEv.kind + lastEv.message) ? 'ratelimited' : 'error';
+    else if (running) state = 'working';
+    const stalled = state === 'working' && now - lastAt > STALL_MS;
+    const lastText = [...feed].reverse().find((f) => f.kind === 'say')?.detail ?? '';
+    const text = events.filter((e) => e.ev.t === 'text.delta').map((e) => e.ev.text).join('');
+
+    return {
+        id: s.id,
+        label: s.label || s.id.slice(0, 8),
+        tool: s.tool,
+        model: s.model,
+        cwd: s.cwd.replace(homedir(), '~'),
+        createdAt: s.created_at,
+        closedAt: s.closed_at,
+        totals, costUsd, usageSource,
+        state, stalled, lastAt, lastText,
+        toolCalls, breakdown,
+        turns: turns.length,
+        turnRows: turnRows.slice(-30),
+        current,
+        files: [...files.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([path, at]) => ({ path, at })),
+        task: (turns[0]?.prompt ?? '').slice(0, 4000),
+        lastPrompt: (lastTurn?.prompt ?? '').slice(0, 1500),
+        reply: (lastTurn?.result_text || text).slice(-3000),
+        feed: feed.slice(-60),
+        worktree: s.worktree_branch,
+    };
+}
+
+function workers(hours) {
+    const h = open(DB_PATH);
+    if (!h) throw new Error(`cannot open ${DB_PATH}`);
+    const oc = open(OPENCODE_DB);
     try {
-        const since = Date.now() - WINDOW_MS;
+        const now = Date.now();
+        const since = now - hours * 3600_000;
         const sessions = h.prepare(
             `SELECT * FROM sessions WHERE closed_at IS NULL OR updated_at > ? OR created_at > ?
-             ORDER BY created_at DESC LIMIT 24`).all(since, since);
-        return sessions.map((s) => {
-            const turns = h.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id').all(s.id);
-            const events = h.prepare(
-                'SELECT seq, at, payload FROM events WHERE session_id = ? ORDER BY seq DESC LIMIT 400').all(s.id)
-                .reverse().map((e) => ({ seq: e.seq, at: e.at, ev: parse(e.payload) }));
-
-            // Collapse duplicate tool.call records (adapters emit one per state change).
-            const feed = [];
-            const seenTool = new Set();
-            let toolCalls = 0;
-            let text = '';
-            for (const { at, ev } of events) {
-                if (ev.t === 'tool.call') {
-                    const key = ev.id;
-                    const sum = summariseInput(ev.input);
-                    if (seenTool.has(key) && !sum) continue;
-                    if (!seenTool.has(key)) toolCalls++;
-                    seenTool.add(key);
-                    const last = feed[feed.length - 1];
-                    if (last && last.id === key) { last.detail = sum || last.detail; continue; }
-                    feed.push({ kind: 'tool', id: key, at, name: ev.name, detail: sum });
-                } else if (ev.t === 'text.delta') {
-                    text += ev.text;
-                } else if (ev.t === 'error') {
-                    feed.push({ kind: 'error', at, name: ev.kind, detail: String(ev.message ?? '').slice(0, 300) });
-                } else if (ev.t === 'turn.completed') {
-                    feed.push({ kind: 'done', at, name: 'turn completed', detail: `${ev.usage?.outputTokens ?? 0} tokens out` });
-                } else if (ev.t === 'permission.request') {
-                    feed.push({ kind: 'perm', at, name: 'permission', detail: String(ev.tool ?? '') });
-                }
-            }
-            const lastTurn = turns[turns.length - 1];
-            const lastEv = events[events.length - 1]?.ev;
-            const running = !!lastTurn && lastTurn.ended_at == null && !s.closed_at;
-            let state = 'idle';
-            if (s.closed_at) state = 'gone';
-            else if (lastEv?.t === 'error') state = /rate/i.test(lastEv.kind + lastEv.message) ? 'ratelimited' : 'error';
-            else if (running) state = 'working';
-            const lastAt = events[events.length - 1]?.at ?? s.updated_at;
-
-            // Usage: opencode's own ledger when we can read it, else what orch recorded at turn end.
-            let usage = { ...ZERO(), ...parse(s.totals) };
-            let costUsd = Number(s.cost_usd ?? 0);
-            let usageSource = 'orch';
-            let currentTurn = null;
-            if (s.tool === 'opencode' && s.native && oc) {
-                try {
-                    const all = opencodeUsage(oc, s.native);
-                    if (all.steps > 0) {
-                        usage = all.usage; costUsd = all.costUsd; usageSource = 'opencode';
-                        if (running) currentTurn = opencodeUsage(oc, s.native, lastTurn.started_at);
-                    }
-                } catch { /* schema drift or locked db: fall back to orch totals */ }
-            }
-            return {
-                id: s.id,
-                label: s.label || s.id.slice(0, 8),
-                tool: s.tool,
-                model: s.model,
-                cwd: s.cwd.replace(homedir(), '~'),
-                createdAt: s.created_at,
-                closedAt: s.closed_at,
-                totals: usage,
-                costUsd,
-                usageSource,
-                currentTurn,
-                state,
-                lastAt,
-                toolCalls,
-                turns: turns.length,
-                task: (turns[0]?.prompt ?? '').slice(0, 4000),
-                lastPrompt: (lastTurn?.prompt ?? '').slice(0, 1500),
-                reply: (lastTurn?.result_text || text).slice(-3000),
-                feed: feed.slice(-40),
-                worktree: s.worktree_branch,
-            };
-        });
+             ORDER BY created_at DESC LIMIT 60`).all(since, since);
+        return sessions.map((s) => worker(h, oc, s, now));
     } finally {
         h.close();
         oc?.close();
@@ -154,12 +241,14 @@ const html = () => readFileSync(join(HERE, 'index.html'));
 
 createServer((req, res) => {
     try {
-        if (req.url === '/api/workers') {
-            const body = JSON.stringify({ now: Date.now(), workers: workers() });
+        const url = new URL(req.url, 'http://localhost');
+        if (url.pathname === '/api/workers') {
+            const hours = Math.min(24 * 30, Math.max(0.25, Number(url.searchParams.get('hours')) || DEFAULT_HOURS));
+            const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, workers: workers(hours) });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             return res.end(body);
         }
-        if (req.url === '/' || req.url === '/index.html') {
+        if (url.pathname === '/' || url.pathname === '/index.html') {
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             return res.end(html());
         }
