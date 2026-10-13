@@ -1,8 +1,7 @@
 {
-  "name": "orchestrator",
+  "name": "orch-office",
   "version": "0.1.0",
-  "description": "",
-  "main": "index.js",
+  "description": "ORCH OFFICE: persistent multi-agent orchestrator. Drive claude, agy and opencode worker sessions from Claude Code over MCP, and watch them in a pixel office.",
   "directories": {
     "test": "test"
   },
@@ -12,10 +11,22 @@
     "mcp": "tsx src/mcp/run.ts",
     "test": "npm run build:test && node --test 'dist-test/test/*.test.js'",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "build:test": "tsc -p tsconfig.test.json"
+    "build:test": "tsc -p tsconfig.test.json",
+    "office": "node office/server.mjs",
+    "office:demo": "node office/demo-db.mjs && ORCH_DB=/tmp/orch-office-demo.db node office/server.mjs"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "ai-agents",
+    "orchestrator",
+    "multi-agent",
+    "opencode",
+    "gemini",
+    "antigravity",
+    "llm"
+  ],
+  "author": "Abdullah Zaki",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^26.6.5",
@@ -29,5 +40,13 @@
   "type": "module",
   "bin": {
     "orch": "dist/cli/main.js"
-  }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zakivibes/ORCH-OFFICE-.git"
+  },
+  "homepage": "https://github.com/zakivibes/ORCH-OFFICE-#readme"
 }

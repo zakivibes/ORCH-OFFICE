@@ -2,3 +2,10 @@ node_modules/
 dist/
 dist-test/
 *.log
+.env
+.env.*
+*.pem
+*.key
+opencode.json
+.orchestrator/
+.orch/

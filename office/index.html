@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORCH OFFICE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #12121c; --panel: #1b1b2a; --ink: #eceaff; --dim: #a19ec8; --line: #34345a;
+    --agy: #4aa3ff; --opencode: #3ddc84; --claude: #ff9f43; --err: #ff4d6d; --warn: #ffd166; --gold: #f9c74f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; font-size: 15px; }
+  #app { display: grid; grid-template-columns: 1fr 430px; grid-template-rows: auto 1fr; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; gap: 22px; align-items: center; padding: 10px 18px; background: #0b0b14; border-bottom: 3px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-family: 'Press Start 2P', monospace; font-size: 15px; margin: 0 14px 0 0; color: var(--gold); line-height: 1.4; }
+  .stat { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .stat b { color: var(--ink); font-size: 18px; font-weight: 700; margin-left: 4px; }
+  #stage { position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+  aside { background: var(--panel); border-left: 3px solid var(--line); overflow-y: auto; padding: 16px 18px; line-height: 1.45; }
+  aside h2 { font-family: 'Press Start 2P', monospace; font-size: 13px; margin: 4px 0 12px; line-height: 1.6; }
+  .pill { display: inline-block; padding: 2px 9px; border: 2px solid var(--line); border-radius: 4px; margin: 0 5px 6px 0; font-size: 13px; }
+  .sec { margin: 16px 0 6px; font-size: 12px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0e0e18; border: 2px solid var(--line); border-radius: 4px; padding: 10px; margin: 0; font: 13px/1.45 ui-monospace, Menlo, monospace; max-height: 240px; overflow-y: auto; }
+  .feed div { padding: 4px 0; border-bottom: 1px dashed #2a2a44; font-size: 13.5px; }
+  .feed .tool b { color: var(--agy); } .feed .error b { color: var(--err); } .feed .done b { color: var(--opencode); } .feed .perm b { color: var(--warn); }
+  .hint { color: var(--dim); }
+  .bar { height: 12px; background: #0e0e18; border: 2px solid var(--line); border-radius: 3px; margin-top: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, #f9c74f, #f8961e); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 2px; }
+  button { font: 600 13px Inter, sans-serif; color: var(--ink); background: #2a2a44; border: 2px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--gold); }
+  #toasts { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+  .toast { background: #0b0b14ee; border: 3px solid var(--gold); border-radius: 6px; padding: 8px 16px; font-weight: 600; font-size: 15px; animation: pop .25s ease-out; }
+  @keyframes pop { from { transform: scale(.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .legend { display: grid; grid-template-columns: 26px 1fr; gap: 6px 8px; margin-top: 10px; }
+  @media (max-width: 900px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 58vh 1fr; } aside { border-left: 0; border-top: 3px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>ORCH &amp; CO.</h1>
+    <span class="stat">On shift<b id="sOnline">0</b></span>
+    <span class="stat">Working<b id="sWorking">0</b></span>
+    <span class="stat">Tool calls<b id="sCalls">0</b></span>
+    <span class="stat">Tokens out<b id="sTokens">0</b></span>
+    <span class="stat">Team morale<b id="sMorale">100%</b></span>
+    <span class="stat" id="sConn">● LIVE</span>
+  </header>
+  <div id="stage"><canvas id="c"></canvas><div id="toasts"></div></div>
+  <aside id="panel"></aside>
+</div>
+<script>
+// ───────────────────────── setup ─────────────────────────
+const C = document.getElementById('c'), X = C.getContext('2d');
+let DPR = 1, S = 4, AW = 300, AH = 200;          // S = screen px per art px; AW/AH = world size in art px
+let data = { workers: [] }, selected = null, tick = 0, lastOk = Date.now();
+const ents = new Map();                           // worker id -> animated entity
+const parts = [];                                 // floating particles
+const COLORS = { agy: '#4aa3ff', opencode: '#3ddc84', claude: '#ff9f43' };
+const SKIN = ['#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#ffdbac'];
+const HAIR = ['#2b1d0e', '#6b3e1e', '#d6b25e', '#1b1b1b', '#b23a3a', '#5a6a8a'];
+const TOOL_ICON = { read: '📖', view_file: '📖', glob: '🗂', list: '🗂', list_dir: '🗂', grep: '🔍', grep_search: '🔍',
+  find_by_name: '🔍', edit: '✏️', write: '📝', write_to_file: '📝', replace_file_content: '✏️', bash: '⌨️', run_command: '⌨️',
+  task: '🤝', todowrite: '✅', webfetch: '🌐' };
+const hash = (s) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+let morale = store.get('orch.morale', {});        // id -> 0..100, cosmetic only
+const achieved = new Set(store.get('orch.ach', []));
+
+function resize() {
+  const r = C.parentElement.getBoundingClientRect();
+  DPR = window.devicePixelRatio || 1;
+  C.width = Math.floor(r.width * DPR); C.height = Math.floor(r.height * DPR);
+  S = Math.max(3, Math.min(6, Math.floor(r.width / 300)));
+  AW = Math.floor(r.width / S); AH = Math.floor(r.height / S);
+  X.setTransform(1, 0, 0, 1, 0, 0); X.imageSmoothingEnabled = false;
+}
+addEventListener('resize', resize);
+
+// art-space primitives (snap to the pixel grid) and screen-space crisp text
+const px = (v) => Math.round(v) * S * DPR;
+function rect(x, y, w, h, c) { X.fillStyle = c; X.fillRect(px(x), px(y), Math.round(w) * S * DPR, Math.round(h) * S * DPR); }
+function label(t, x, y, { color = '#eceaff', size = 14, weight = 600, align = 'center', font = 'Inter', outline = true } = {}) {
+  X.font = `${weight} ${size * DPR}px ${font}, system-ui, sans-serif`;
+  X.textAlign = align; X.textBaseline = 'middle';
+  const sx = x * S * DPR, sy = y * S * DPR;
+  if (outline) { X.lineWidth = 4 * DPR; X.strokeStyle = 'rgba(8,8,16,.92)'; X.lineJoin = 'round'; X.strokeText(t, sx, sy); }
+  X.fillStyle = color; X.fillText(t, sx, sy);
+  return X.measureText(t).width / (S * DPR);
+}
+
+// ───────────────────────── world layout ─────────────────────────
+const BOSS = { x: 16, y: 44 }, COFFEE = () => ({ x: AW - 26, y: 34 }), DOOR = () => ({ x: 8, y: AH - 14 });
+function deskSlot(i) {
+  const cols = Math.max(1, Math.floor((AW - 92) / 60));
+  return { x: 92 + (i % cols) * 60, y: 52 + Math.floor(i / cols) * 70 };
+}
+
+// ───────────────────────── entities ─────────────────────────
+function syncEntities() {
+  const live = data.workers.filter((w) => w.state !== 'gone');
+  live.forEach((w, i) => {
+    const d = deskSlot(i), seat = { x: d.x + 13, y: d.y - 6 };
+    let e = ents.get(w.id);
+    if (!e) {
+      const door = DOOR();
+      e = { id: w.id, x: door.x, y: door.y, seat, path: [seat], mode: 'walk', state: w.state, lastTool: null, calls: w.toolCalls, carrying: false };
+      ents.set(w.id, e);
+      if (data.first) { e.x = seat.x; e.y = seat.y; e.path = []; e.mode = 'sit'; }
+      else toast(`🚪 ${w.label} joined the team`);
+    }
+    e.seat = seat; e.desk = d; e.w = w;
+    // react to state changes
+    if (e.state !== w.state) {
+      if (e.state === 'working' && w.state === 'idle') { e.path = [{ x: BOSS.x + 30, y: BOSS.y + 2 }, seat]; e.carrying = true; e.mode = 'walk';
+        toast(`📄 ${w.label} delivered a report`); burst(e.x + 6, e.y - 6, '📄', 1); }
+      if (w.state === 'ratelimited') { const c = COFFEE(); e.path = [{ x: c.x - 10, y: c.y + 4 }]; e.mode = 'walk'; toast(`☕ ${w.label} is rate limited — coffee break`); }
+      if (e.state === 'ratelimited' && w.state !== 'ratelimited') { e.path = [seat]; e.mode = 'walk'; }
+      if (w.state === 'error') { burst(d.x + 18, d.y, '💥', 3); toast(`❗ ${w.label} hit an error`); }
+      if (w.state === 'working' && e.state !== 'working') { e.path = [seat]; e.mode = 'walk'; }
+      e.state = w.state;
+    }
+    // new tool calls float up
+    const tools = w.feed.filter((f) => f.kind === 'tool');
+    const last = tools[tools.length - 1];
+    if (last && last.id + last.detail !== e.lastTool) {
+      if (e.lastTool !== null && !data.first) burst(seat.x + 6, seat.y - 10, TOOL_ICON[last.name] || '⚙️', 1, last.name);
+      e.lastTool = last.id + last.detail;
+    }
+    if (w.toolCalls > e.calls) {
+      for (const n of [10, 25, 50, 100]) if (e.calls < n && w.toolCalls >= n) achieve(`${w.id}:${n}`, `🏆 ${w.label}: ${n} tool calls!`);
+      e.calls = w.toolCalls;
+    }
+  });
+  for (const id of [...ents.keys()]) if (!live.find((w) => w.id === id)) {
+    const e = ents.get(id); if (!e.leaving) { e.leaving = true; e.path = [DOOR()]; e.mode = 'walk'; toast(`🏁 ${e.w?.label ?? 'A worker'} finished their shift`); }
+  }
+  data.first = false;
+}
+
+function stepEntity(e) {
+  if (e.path.length) {
+    const t = e.path[0], dx = t.x - e.x, dy = t.y - e.y, d = Math.hypot(dx, dy), v = 0.9;
+    if (d < v) { e.x = t.x; e.y = t.y; e.path.shift(); if (e.carrying && Math.abs(t.x - (BOSS.x + 30)) < 1) { e.carrying = false; burst(BOSS.x + 24, BOSS.y - 6, '⭐', 2); } }
+    else { e.x += dx / d * v; e.y += dy / d * v; e.dir = dx < 0 ? -1 : 1; }
+    e.mode = e.path.length ? 'walk' : (e.leaving ? 'gone' : 'sit');
+  }
+  if (e.mode === 'gone') ents.delete(e.id);
+}
+
+// ───────────────────────── particles ─────────────────────────
+function burst(x, y, icon, n = 1, text = '') {
+  for (let i = 0; i < n; i++) parts.push({ x: x + (Math.random() - .5) * 8 * (n > 1), y, vy: -.35 - Math.random() * .2, life: 90, icon, text });
+}
+function drawParts() {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.y += p.vy; p.life--;
+    X.globalAlpha = Math.min(1, p.life / 30);
+    label(p.icon + (p.text ? ' ' + p.text : ''), p.x, p.y, { size: 15, color: '#fff' });
+    X.globalAlpha = 1;
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+}
+
+// ───────────────────────── drawing ─────────────────────────
+function drawRoom() {
+  for (let y = 0; y < AH; y += 10) for (let x = 0; x < AW; x += 10) rect(x, y, 10, 10, ((x + y) / 10) % 2 ? '#1b1b2c' : '#1f1f33');
+  rect(0, 0, AW, 26, '#272744'); rect(0, 26, AW, 2, '#3a3a66');
+  const hr = new Date().getHours(), night = hr < 6 || hr >= 18;
+  for (let x = 70; x < AW - 50; x += 56) {
+    rect(x, 5, 30, 15, night ? '#0b1c3a' : '#7ec8ff'); rect(x + 14, 5, 2, 15, '#272744'); rect(x, 12, 30, 1, '#272744');
+    if (night && (hash(String(x)) + (tick >> 5)) % 4 === 0) rect(x + 5 + (x % 9), 8, 1, 1, '#fff');
+    if (!night) rect(x + 3, 15, 8, 3, '#ffffffaa');
+  }
+  // hall of fame board
+  rect(6, 4, 52, 20, '#3b2a1a'); rect(7, 5, 50, 18, '#2a3a2a');
+  label('HALL OF FAME', 32, 9, { size: 11, font: 'Press Start 2P', color: '#f9c74f', weight: 400 });
+  const fame = data.workers.filter((w) => w.state === 'gone' && w.toolCalls > 0).sort((a, b) => b.toolCalls - a.toolCalls).slice(0, 1)[0];
+  label(fame ? `${fame.label} · ${fame.toolCalls} calls` : 'be the first!', 32, 17, { size: 11, color: '#cfe' });
+  // coffee machine
+  const c = COFFEE();
+  rect(c.x, c.y - 18, 16, 20, '#5a5a66'); rect(c.x + 2, c.y - 15, 12, 6, '#1e1e24'); rect(c.x + 5, c.y - 4, 6, 4, '#c98f5a');
+  if ((tick >> 3) % 2) rect(c.x + 7, c.y - 8, 1, 3, '#ddd');
+  label('☕ COFFEE', c.x + 8, c.y + 7, { size: 12, color: '#ffd166' });
+  // door + plants
+  const d = DOOR(); rect(d.x - 4, d.y - 22, 16, 24, '#5a3a22'); rect(d.x + 8, d.y - 11, 2, 2, '#f9c74f');
+  label('DOOR', d.x + 4, d.y + 6, { size: 11, color: '#a19ec8' });
+  plant(AW - 14, AH - 18); plant(70, AH - 18);
+}
+function plant(x, y) { rect(x, y + 6, 8, 7, '#8a4b2a'); rect(x + 1, y, 6, 6, '#2f9e44'); rect(x - 1, y + 2, 3, 3, '#37b24d'); rect(x + 6, y + 1, 3, 3, '#37b24d'); }
+
+function drawPerson(x, y, w, phase, opts = {}) {
+  const h = hash(w.id), skin = SKIN[h % SKIN.length], hair = HAIR[(h >> 3) % HAIR.length], shirt = COLORS[w.tool] || '#aaa';
+  const walking = opts.walking, typing = w.state === 'working' && !walking;
+  const bob = walking ? ((phase >> 3) % 2) : typing ? ((phase >> 2) % 2) : 0;
+  rect(x + 3, y + 10 + bob, 8, 8, shirt); rect(x + 3, y + 10 + bob, 8, 1, '#ffffff33');
+  rect(x + 4, y + 2 + bob, 6, 7, skin);
+  rect(x + 4, y + 1 + bob, 6, 2, hair); rect(x + 3, y + 2 + bob, 1, 4, hair);
+  rect(x + 5, y + 5 + bob, 1, 1, '#111'); rect(x + 8, y + 5 + bob, 1, 1, '#111');
+  if (w.state === 'error') rect(x + 5, y + 7 + bob, 4, 1, '#311'); else if (w.state === 'working') rect(x + 6, y + 7 + bob, 2, 1, '#a55');
+  const a = typing ? ((phase >> 1) % 2) : 0;
+  rect(x + 1, y + 11 + bob + a, 2, 5, shirt); rect(x + 11, y + 11 + bob + (1 - a), 2, 5, shirt);
+  rect(x + 1, y + 16 + bob + a, 2, 1, skin); rect(x + 11, y + 16 + bob + (1 - a), 2, 1, skin);
+  if (walking) { const l = (phase >> 3) % 2; rect(x + 4, y + 18, 2, 3 - l, '#2b2b3b'); rect(x + 8, y + 18, 2, 2 + l, '#2b2b3b'); }
+  if (opts.carrying) { rect(x + 11, y + 9, 5, 6, '#f4f4f4'); rect(x + 12, y + 11, 3, 1, '#999'); }
+  if (opts.cup) { rect(x + 12, y + 12, 3, 3, '#fff'); rect(x + 13, y + 11, 1, 1, '#c98f5a'); }
+}
+
+function drawDesk(e, i) {
+  const w = e.w, d = e.desk, phase = tick + i * 7;
+  rect(d.x - 2, d.y + 24, 42, 3, 'rgba(0,0,0,.35)');
+  rect(d.x + 14, d.y + 6, 12, 14, '#3a3a52');                           // chair back
+  const seated = e.mode === 'sit' && Math.hypot(e.x - e.seat.x, e.y - e.seat.y) < 1;
+  if (seated) drawPerson(e.seat.x, e.seat.y, w, phase);
+  rect(d.x, d.y + 14, 40, 10, '#7a5230'); rect(d.x, d.y + 14, 40, 2, '#9a6a40');
+  rect(d.x + 2, d.y + 24, 2, 5, '#3b2a1a'); rect(d.x + 36, d.y + 24, 2, 5, '#3b2a1a');
+  rect(d.x + 12, d.y + 1, 16, 12, '#20202a');
+  const scr = w.state === 'error' ? '#6a1426' : w.state === 'ratelimited' ? '#5a4a10' : w.state === 'working' ? '#0e3a2a' : '#13233f';
+  rect(d.x + 13, d.y + 2, 14, 10, scr);
+  if (w.state === 'working') for (let r = 0; r < 4; r++) rect(d.x + 14, d.y + 3 + r * 2, 3 + ((hash(w.id) + r * 5 + (phase >> 3)) % 10), 1, '#3ddc84');
+  if (w.state === 'error' && (phase >> 4) % 2) label('!', d.x + 20, d.y + 7, { size: 16, color: '#ff4d6d', weight: 800 });
+  rect(d.x + 19, d.y + 13, 2, 1, '#20202a');
+  rect(d.x + 31, d.y + 11, 3, 3, '#fff'); rect(d.x + 3, d.y + 12, 6, 2, '#ddd');   // mug + papers
+  // nameplate (crisp text)
+  const name = w.label.length > 22 ? w.label.slice(0, 21) + '…' : w.label;
+  label(name, d.x + 20, d.y + 34, { size: 14, weight: 700, color: selected === w.id ? '#f9c74f' : '#eceaff' });
+  label(shortModel(w), d.x + 20, d.y + 40, { size: 12, weight: 600, color: COLORS[w.tool] || '#aaa' });
+  // morale hearts
+  const m = morale[w.id] ?? 60, hearts = Math.round(m / 25);
+  label('❤'.repeat(hearts) + '♡'.repeat(4 - hearts), d.x + 20, d.y + 46, { size: 11, color: '#ff6b8b', outline: false });
+  if (seated) bubble(w, e.seat.x + 7, e.seat.y - 6, phase);
+  if (selected === w.id) {
+    X.strokeStyle = '#f9c74f'; X.lineWidth = 2 * DPR; X.setLineDash([6 * DPR, 4 * DPR]); X.lineDashOffset = -tick / 2;
+    X.strokeRect(px(d.x - 5), px(d.y - 18), 50 * S * DPR, 68 * S * DPR); X.setLineDash([]);
+  }
+}
+
+function bubble(w, cx, cy, phase) {
+  let t = '', col = '#eceaff';
+  if (w.state === 'working') { const f = w.feed.filter((e) => e.kind === 'tool').pop(); t = f ? `${TOOL_ICON[f.name] || '⚙️'} ${f.name}` : '💭 thinking'; }
+  else if (w.state === 'idle') { t = '💤' + ' z'.repeat(1 + ((phase >> 4) % 3)); col = '#a19ec8'; }
+  else if (w.state === 'error') { t = '❗ error'; col = '#ff4d6d'; }
+  else return;
+  X.font = `600 ${13 * DPR}px Inter, sans-serif`;
+  const tw = X.measureText(t).width / (S * DPR) + 4;
+  rect(cx - tw / 2, cy - 5, tw, 9, '#0b0b14'); rect(cx - 1, cy + 4, 2, 2, '#0b0b14');
+  X.strokeStyle = col; X.lineWidth = 1.5 * DPR; X.strokeRect(px(cx - tw / 2), px(cy - 5), Math.round(tw) * S * DPR, 9 * S * DPR);
+  label(t, cx, cy - 0.5, { size: 13, color: col, outline: false });
+}
+
+function drawWalkers() {
+  for (const e of ents.values()) {
+    const seated = e.mode === 'sit' && Math.hypot(e.x - e.seat.x, e.y - e.seat.y) < 1;
+    if (seated) continue;
+    const atCoffee = e.state === 'ratelimited' && !e.path.length;
+    drawPerson(e.x, e.y, e.w, tick, { walking: !!e.path.length, carrying: e.carrying, cup: atCoffee });
+    label(e.w.label.slice(0, 18), e.x + 7, e.y - 4, { size: 12, weight: 700, color: COLORS[e.w.tool] });
+    if (atCoffee && (tick >> 5) % 2) label('☕ rate limited', e.x + 7, e.y - 11, { size: 12, color: '#ffd166' });
+  }
+}
+
+function drawBoss() {
+  const b = BOSS;
+  rect(b.x - 2, b.y + 24, 52, 3, 'rgba(0,0,0,.35)');
+  rect(b.x + 18, b.y + 6, 14, 14, '#5a2a6a');
+  drawPerson(b.x + 18, b.y - 6, { id: 'coordinator', tool: 'claude', state: 'working' }, tick);
+  rect(b.x + 23, b.y - 9, 4, 2, '#f9c74f'); rect(b.x + 22, b.y - 10, 1, 1, '#f9c74f'); rect(b.x + 27, b.y - 10, 1, 1, '#f9c74f');  // crown
+  rect(b.x, b.y + 14, 50, 10, '#4a2a5a'); rect(b.x, b.y + 14, 50, 2, '#6a3a7a');
+  rect(b.x + 2, b.y + 3, 12, 10, '#20202a'); rect(b.x + 3, b.y + 4, 10, 8, '#2a1a3a');
+  rect(b.x + 36, b.y + 3, 12, 10, '#20202a'); rect(b.x + 37, b.y + 4, 10, 8, '#2a1a3a');
+  for (let r = 0; r < 3; r++) rect(b.x + 4, b.y + 5 + r * 2, 2 + ((tick >> 4) + r * 3) % 7, 1, '#ff9f43');
+  label('COORDINATOR', b.x + 25, b.y + 34, { size: 13, weight: 800, color: '#ff9f43' });
+  label('plans · reviews · tests', b.x + 25, b.y + 40, { size: 11, color: '#a19ec8' });
+}
+
+// office cat wanders
+const cat = { x: 60, y: 120, tx: 60, ty: 120, wait: 0 };
+function drawCat() {
+  if (cat.wait > 0) cat.wait--; else {
+    const dx = cat.tx - cat.x, dy = cat.ty - cat.y, d = Math.hypot(dx, dy);
+    if (d < .5) { cat.tx = 30 + Math.random() * (AW - 60); cat.ty = 70 + Math.random() * (AH - 90); cat.wait = 120 + Math.random() * 300; }
+    else { cat.x += dx / d * .35; cat.y += dy / d * .35; cat.dir = dx < 0 ? -1 : 1; }
+  }
+  const x = cat.x, y = cat.y, f = (tick >> 3) % 2;
+  rect(x, y, 9, 4, '#e8a33d'); rect(x + (cat.dir < 0 ? -2 : 8), y - 3, 4, 4, '#e8a33d');
+  rect(x + (cat.dir < 0 ? -2 : 8), y - 4, 1, 1, '#e8a33d'); rect(x + (cat.dir < 0 ? 1 : 11), y - 4, 1, 1, '#e8a33d');
+  rect(x + (cat.dir < 0 ? 9 : -2), y - 1 - f, 2, 1, '#e8a33d');
+  if (cat.wait > 0 && cat.wait % 200 < 40) label('zz', x + 4, y - 7, { size: 11, color: '#a19ec8', outline: false });
+}
+
+function shortModel(w) { return `${w.tool} · ${String(w.model || '').replace(/^.*\//, '').replace('-free', '')}`.slice(0, 30); }
+
+function frame() {
+  tick++;
+  X.fillStyle = '#12121c'; X.fillRect(0, 0, C.width, C.height);
+  drawRoom(); drawBoss();
+  [...ents.values()].forEach((e, i) => { stepEntity(e); if (e.desk && !e.leaving) drawDesk(e, i); });
+  drawCat(); drawWalkers(); drawParts();
+  if (!ents.size) label('No workers on shift. The coordinator is hiring…', AW / 2 + 20, AH / 2, { size: 18, color: '#a19ec8' });
+  requestAnimationFrame(frame);
+}
+
+// ───────────────────────── interaction ─────────────────────────
+C.addEventListener('click', (ev) => {
+  const r = C.getBoundingClientRect(), ax = (ev.clientX - r.left) / S, ay = (ev.clientY - r.top) / S;
+  if (Math.hypot(ax - cat.x - 4, ay - cat.y) < 8) { toast(['🐱 meow', '🐱 purrr…', '🐱 *knocks a mug off the desk*', '🐱 demands a raise'][tick % 4]); burst(cat.x + 4, cat.y - 6, '💛', 2); return; }
+  if (ax > BOSS.x && ax < BOSS.x + 50 && ay > BOSS.y - 12 && ay < BOSS.y + 42) { selected = null; renderPanel(); return; }
+  for (const e of ents.values()) {
+    const d = e.desk;
+    const hitDesk = d && ax >= d.x - 5 && ax <= d.x + 45 && ay >= d.y - 18 && ay <= d.y + 50;
+    const hitBody = Math.abs(ax - e.x - 7) < 8 && Math.abs(ay - e.y - 10) < 12;
+    if (hitDesk || hitBody) { selected = e.id; renderPanel(); return; }
+  }
+  selected = null; renderPanel();
+});
+addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') { selected = null; renderPanel(); }
+  if (ev.key === 'Tab') {
+    ev.preventDefault(); const ids = [...ents.keys()]; if (!ids.length) return;
+    const i = ids.indexOf(selected); selected = ids[(i + (ev.shiftKey ? -1 : 1) + ids.length) % ids.length]; renderPanel();
+  }
+});
+
+function cheer(id, kind) {
+  const e = ents.get(id); if (!e) return;
+  morale[id] = Math.min(100, (morale[id] ?? 60) + (kind === 'coffee' ? 15 : 10)); store.set('orch.morale', morale);
+  burst(e.seat.x + 6, e.seat.y - 8, kind === 'coffee' ? '☕' : '👏', 3);
+  toast(kind === 'coffee' ? `☕ You bought ${e.w.label} a coffee` : `👏 ${e.w.label} feels appreciated`);
+  updateMorale(); renderPanel();
+}
+function updateMorale() {
+  const ids = [...ents.keys()]; const avg = ids.length ? ids.reduce((a, id) => a + (morale[id] ?? 60), 0) / ids.length : 100;
+  document.getElementById('sMorale').textContent = `${Math.round(avg)}%`;
+}
+setInterval(() => { for (const id of ents.keys()) morale[id] = Math.max(20, (morale[id] ?? 60) - 1); store.set('orch.morale', morale); updateMorale(); }, 60000);
+
+function achieve(key, msg) { if (achieved.has(key)) return; achieved.add(key); store.set('orch.ach', [...achieved]); toast(msg); }
+
+// ───────────────────────── panel ─────────────────────────
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`; };
+const STATE_LABEL = { working: '⌨️ Working', idle: '💤 Idle — waiting for orders', ratelimited: '☕ Rate limited', error: '❗ Error', gone: '🏁 Shift over' };
+
+function renderPanel() {
+  const p = document.getElementById('panel');
+  const w = data.workers.find((x) => x.id === selected);
+  if (!w) {
+    const gone = data.workers.filter((x) => x.state === 'gone').slice(0, 8);
+    p.innerHTML = `<h2>WELCOME, BOSS</h2>
+      <p class="hint">Every desk is a worker the coordinator hired through orch. Click a worker (or press <b>TAB</b>) to inspect their job. Click the cat at your own risk.</p>
+      <div class="legend">
+        <span>⌨️</span><span>typing at a green screen = working</span>
+        <span>📄</span><span>walks a report to the coordinator when a turn finishes</span>
+        <span>💤</span><span>idle, waiting for the next order</span>
+        <span>☕</span><span>rate limited: off to the coffee machine</span>
+        <span>❗</span><span>error: red screen</span>
+        <span>❤</span><span>morale: praise or buy coffee from the inspect panel</span>
+      </div>
+      <div class="sec">Recently finished shifts</div>
+      ${gone.map((g) => `<div>🏁 <b>${esc(g.label)}</b> <span class="hint">· ${esc(g.tool)} · ${g.toolCalls} calls · ${ago(g.lastAt)}</span></div>`).join('') || '<div class="hint">none yet</div>'}`;
+    return;
+  }
+  const t = w.totals || {}, lvl = 1 + Math.floor(w.toolCalls / 15), into = (w.toolCalls % 15) / 15 * 100;
+  p.innerHTML = `
+    <h2 style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</h2>
+    <span class="pill">${STATE_LABEL[w.state] || w.state}</span><span class="pill">${esc(w.tool)}</span><span class="pill">${esc(w.model)}</span>
+    ${w.worktree ? `<span class="pill">🌿 ${esc(w.worktree)}</span>` : ''}
+    ${w.state !== 'gone' ? `<div class="btns"><button onclick="cheer('${w.id}','praise')">👏 Praise</button><button onclick="cheer('${w.id}','coffee')">☕ Buy coffee</button></div>` : ''}
+    <div class="sec">Level ${lvl} engineer · ${w.toolCalls} tool calls · ${w.turns} turns · morale ${Math.round(morale[w.id] ?? 60)}%</div>
+    <div class="bar"><i style="width:${into}%"></i></div>
+    <div class="sec">Stats</div>
+    <div>Tokens in <b>${(t.inputTokens || 0).toLocaleString()}</b> · out <b>${(t.outputTokens || 0).toLocaleString()}</b> · thinking <b>${(t.thinkingTokens || 0).toLocaleString()}</b></div>
+    <div class="hint">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
+    <div class="sec">Live activity</div>
+    <div class="feed">${w.feed.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>
+    <div class="sec">Latest reply</div><pre>${esc(w.reply) || '(no reply yet)'}</pre>
+    <div class="sec">Current orders</div><pre>${esc(w.lastPrompt)}</pre>
+    ${w.task !== w.lastPrompt ? `<div class="sec">Original job</div><pre>${esc(w.task)}</pre>` : ''}
+    <div class="sec">Session</div><div class="hint">${esc(w.id)}</div>`;
+}
+
+function toast(msg) {
+  const box = document.getElementById('toasts'), el = document.createElement('div');
+  el.className = 'toast'; el.textContent = msg; box.appendChild(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), 4500);
+}
+
+// ───────────────────────── data ─────────────────────────
+async function poll() {
+  try {
+    const r = await fetch('/api/workers', { cache: 'no-store' });
+    const j = await r.json(); if (j.error) throw new Error(j.error);
+    const first = !data.loaded; data = j; data.loaded = true; data.first = first;
+    syncEntities();
+    const live = data.workers.filter((w) => w.state !== 'gone');
+    document.getElementById('sOnline').textContent = live.length;
+    document.getElementById('sWorking').textContent = live.filter((w) => w.state === 'working').length;
+    document.getElementById('sCalls').textContent = data.workers.reduce((a, w) => a + w.toolCalls, 0);
+    document.getElementById('sTokens').textContent = data.workers.reduce((a, w) => a + (w.totals?.outputTokens || 0), 0).toLocaleString();
+    updateMorale();
+    if (selected || first) renderPanel();
+    lastOk = Date.now();
+  } catch (e) { /* shown as OFFLINE */ }
+  const ok = Date.now() - lastOk < 10000, c = document.getElementById('sConn');
+  c.textContent = ok ? '● LIVE' : '● OFFLINE'; c.style.color = ok ? '#3ddc84' : '#ff4d6d';
+}
+
+resize(); renderPanel(); frame(); poll(); setInterval(poll, 3000);
+</script>
+</body>
+</html>

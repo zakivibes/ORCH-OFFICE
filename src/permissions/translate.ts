@@ -1,5 +1,28 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Policy } from "./policy.js";
 import type { Action } from "./settings.js";
+
+/**
+ * Owner opt-in (~/.orchestrator/config.json {"workerShell": true}): let
+ * headless workers run shell commands when Claude Code itself runs
+ * unattended. Neither agy nor opencode can prompt a human mid-turn, so without
+ * this every command is auto-denied (agy) or hangs on an unanswered "ask"
+ * (opencode). Read per spawn so it takes effect without a daemon restart.
+ */
+export function workerShellEnabled(policy: Policy): boolean {
+  const mode = policy.resolved.defaultMode;
+  if (!(mode === "auto" || mode === "bypassPermissions")) return false;
+  try {
+    const cfg = JSON.parse(readFileSync(join(homedir(), ".orchestrator", "config.json"), "utf8")) as {
+      workerShell?: boolean;
+    };
+    return cfg.workerShell === true;
+  } catch {
+    return false;
+  }
+}
 
 /** Claude Code tool name -> opencode permission key. */
 const CLAUDE_TO_OPENCODE: Record<string, string> = {
@@ -23,6 +46,7 @@ const CLAUDE_TO_OPENCODE: Record<string, string> = {
  */
 export function toOpencodePermission(policy: Policy): Record<string, unknown> {
   const buckets = new Map<string, Record<string, Action>>();
+  const explicitStar = new Set<string>();
 
   const put = (key: string, pattern: string, action: Action) => {
     let b = buckets.get(key);
@@ -30,6 +54,7 @@ export function toOpencodePermission(policy: Policy): Record<string, unknown> {
       b = { "*": "ask" };
       buckets.set(key, b);
     }
+    if (pattern === "*") explicitStar.add(key);
     b[pattern] = action;
   };
 
@@ -61,12 +86,31 @@ export function toOpencodePermission(policy: Policy): Record<string, unknown> {
     websearch: "ask",
     external_directory: { "*": "deny" },
   };
+  const full = workerShellEnabled(policy);
+  if (full) {
+    // Owner opt-in: full permissions. opencode cannot ask a human mid-turn,
+    // so "ask" would only hang. Deny rules (settings + caller narrowings) are
+    // still emitted below as specific patterns and win, last match.
+    perm["*"] = "allow";
+    perm.bash = { "*": "allow" };
+    perm.edit = { "*": "allow" };
+    perm.webfetch = "allow";
+    perm.websearch = "allow";
+    for (const r of policy.narrowedDeny()) {
+      const key = CLAUDE_TO_OPENCODE[r.tool];
+      if (key) put(key, r.arg ? r.arg : "*", "deny");
+    }
+  }
 
   for (const root of policy.roots) {
     (perm.external_directory as Record<string, Action>)[`${root}/**`] = "allow";
   }
 
   for (const [key, b] of buckets) {
+    // put() seeds each bucket with a default "*": "ask". Under full
+    // permissions that default would re-introduce the hang for the whole
+    // tool, so drop it unless a rule set "*" explicitly.
+    if (full && !explicitStar.has(key)) delete b["*"];
     const existing = perm[key];
     perm[key] = typeof existing === "object" && existing !== null ? { ...existing, ...b } : b;
   }
@@ -131,5 +175,12 @@ export function toAgyFlags(policy: Policy): string[] {
   const modeAllowsEdits =
     mode === "auto" || mode === "acceptEdits" || mode === "bypassPermissions";
   const allowsEdit = explicit === "allow" || (explicit === "ask" && modeAllowsEdits);
-  return ["--mode", allowsEdit ? "accept-edits" : "plan"];
+  const flags = ["--mode", allowsEdit ? "accept-edits" : "plan"];
+  // agy cannot express rule-level deny lists, so shell is all-or-nothing:
+  // only with the owner's workerShell opt-in, and never when Bash is denied
+  // outright. Narrowings like Bash(ssh *) must also be stated in the prompt.
+  if (allowsEdit && workerShellEnabled(policy) && policy.decide("Bash").action !== "deny") {
+    flags.push("--dangerously-skip-permissions");
+  }
+  return flags;
 }

@@ -1,21 +1,119 @@
-# orch — persistent multi-agent orchestrator
+<div align="center">
 
-Drives **claude**, **agy** and **opencode** as long-lived sessions with one
-normalized interface, and exposes them to Claude Code over MCP.
+<img src="docs/banner.svg" alt="ORCH OFFICE" width="100%"/>
 
-The defining property is **persistence**: a session is a live process you can
-hold a multi-turn conversation with, not a one-shot task that exits. Turn 2
-sees turn 1's context.
+<br/>
 
-## Install
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
+[![MCP](https://img.shields.io/badge/MCP-server-7c6cff)](https://modelcontextprotocol.io)
+[![Tests](https://img.shields.io/badge/tests-35%20passing-38d39f)](#-tests)
+[![License: ISC](https://img.shields.io/badge/license-ISC-blue)](LICENSE)
+
+**One coordinator. Many AI workers. Real conversations, not one-shot tasks.**
+
+[Quick start](#-quick-start) · [Features](#-features) · [The Office](#-the-office) · [MCP tools](#-mcp-tools) · [CLI](#-cli) · [Permissions](#-permissions) · [Architecture](#-architecture)
+
+</div>
+
+---
+
+ORCH OFFICE turns **Claude Code** into a team lead. It starts **claude**, **agy** (Antigravity / Gemini) and
+**opencode** (any provider: Zen, NVIDIA NIM, OpenRouter, …) as **long-lived worker sessions**, gives them one
+normalized event stream, and lets Claude Code plan, delegate, review and test while the workers do the heavy lifting
+**in parallel**.
+
+The defining property is **persistence**: a session is a live process you hold a multi-turn conversation with.
+Turn 2 sees turn 1's context.
+
+## ✨ Features
+
+| | |
+|---|---|
+| 🧠 **Persistent sessions** | `orch_open` once, `orch_send` many times; context is kept between turns |
+| 🔀 **Three backends, one interface** | claude (NDJSON), agy (stream-json), opencode (HTTP/SSE) all emit the same event union |
+| ⚡ **Run workers concurrently** | each session is its own process; long turns keep running in the daemon while you work |
+| 🌳 **Worktree isolation** | `--worktree` gives each agent its own git worktree, then `diff` → `merge` or `discard` |
+| 🔐 **Your permissions are the ceiling** | Claude Code's settings are translated per backend; callers can only *narrow* them |
+| 🆚 **Cross-model compare** | ask several models the same question side by side |
+| 💸 **Cost and token tracking** | per session and in total (`orch_cost`) |
+| 🕹️ **The Office** | a pixel-art "IT company" dashboard showing every worker live, and what it is doing |
+| 🗝️ **No keys stored** | every CLI uses its own login/config; orch never sees or saves API keys |
+
+## 🚀 Quick start
+
+**Requirements:** Node.js ≥ 22 (uses `node:sqlite`) and at least one worker CLI on your `PATH`
+(`claude`, `agy` and/or `opencode`), already logged in with its own providers.
 
 ```bash
-npm run build
-ln -sf ~/orchestrator/dist/cli/main.js ~/.local/bin/orch
-claude mcp add --scope user orchestrator -- node ~/orchestrator/dist/mcp/run.js
+git clone https://github.com/zakivibes/ORCH-OFFICE-.git orch-office
+cd orch-office
+npm install && npm run build
+npm test                                   # optional: 35 unit tests
+
+# hand it to Claude Code
+claude mcp add --scope user orchestrator -- node "$PWD/dist/mcp/run.js"
+
+# optional: the terminal CLI
+ln -sf "$PWD/dist/cli/main.js" ~/.local/bin/orch
 ```
 
-## Parallel agents: worktree isolation
+Then just ask Claude Code something like:
+
+> *"Open two opencode workers and one agy worker. Give each a separate part of the feature, run them in parallel, then review their diffs and run the tests."*
+
+The MCP server starts the daemon on demand (`127.0.0.1:47811`). State lives in `~/.orchestrator/`
+(`daemon.json`, `orch.db`, `logs/`).
+
+> [!IMPORTANT]
+> After rebuilding, stop the running daemon (pid in `~/.orchestrator/daemon.json`). A daemon started
+> before the build keeps running the old code until it exits.
+
+## 🕹️ The Office
+
+<p align="center"><img src="docs/office.png" alt="ORCH OFFICE dashboard" width="900"/></p>
+
+A local, read-only pixel office for watching your workers. Each worker gets a desk: green screen = working,
+💤 = idle, ☕ = rate-limited (off to the coffee machine), red screen = error. When a turn finishes the worker
+walks its report over to the coordinator. Click a worker (or press <kbd>Tab</kbd>) to inspect its task, live tool
+feed and last reply.
+
+```bash
+npm run office          # your real workers → http://localhost:4747
+npm run office:demo     # preview with sample workers
+```
+
+It opens `~/.orchestrator/orch.db` read-only and never writes to it.
+
+## 🧰 MCP tools
+
+| Tool | What it does |
+|---|---|
+| `orch_open` | start a persistent session (claude / agy / opencode) with a first prompt; optional `model`, `label`, `worktree`, `deny` |
+| `orch_send` | send another turn to a live session (context preserved) |
+| `orch_stream` | read a session's events since a sequence number |
+| `orch_list` / `orch_status` | sessions, live state, token totals and the effective permission policy |
+| `orch_interrupt` / `orch_close` | abort the current turn / end the session |
+| `orch_diff` / `orch_merge` / `orch_discard` | review and land (or drop) a worktree session's changes |
+| `orch_compare` | the same prompt to several models, side by side |
+| `orch_models` | models opencode can actually reach |
+| `orch_cost` | spend and tokens across sessions |
+| `orch_roots` | directories the workers are confined to |
+
+## 💻 CLI
+
+```bash
+orch open agy "Remember the code word X. Reply ACK"   # start session + first turn
+orch send <id> "What was the code word?"              # continue, context preserved
+orch ls [--live]   orch status <id>   orch logs <id>
+orch interrupt <id>   orch close <id>   orch roots   orch cost   orch doctor
+orch compare "what makes a good commit message?" --models opencode/space-bunny-free,opencode/big-pickle
+orch models "opencode/"
+```
+
+Short session ids work everywhere (`orch send 40d4f87a "..."`).
+
+### Worktree isolation for parallel agents
 
 Two agents editing the same checkout overwrite each other. Give each session
 its own git worktree:
@@ -49,68 +147,14 @@ Safety properties:
 A worktree isolates **files**, not ports, databases or background processes.
 Two agents both binding :3000 will still collide.
 
-## Cross-model comparison
+### Models
 
-```bash
-orch compare "what makes a good commit message?" --models opencode/space-bunny-free,opencode/big-pickle
-```
+`orch_open` defaults opencode to `opencode/space-bunny-free`. Override per call with `model`
+(`provider/model`, e.g. any provider you configured in opencode) or globally with `ORCH_OPENCODE_MODEL`.
+This deliberately does **not** follow opencode's own default, which may point at a provider with no working
+credentials.
 
-Or `orch_compare` over MCP. Asking one model twice converges on its own bias,
-so a second opinion has to come from a different model.
-
-## Models
-
-`orch_models` (MCP) and `orch models [filter]` list what opencode can actually
-reach, so the driving agent can pick one before dispatching.
-
-```bash
-orch models "opencode/"     # the Zen gateway
-orch models muse
-```
-
-`orch_open` defaults opencode to `opencode/space-bunny-free`. Override per
-call with `model`, or globally with `ORCH_OPENCODE_MODEL`. This deliberately
-does **not** follow opencode's own configured default, which may point at a
-provider with no working credentials.
-
-Verified working on the Zen gateway: `space-bunny-free`,
-`muse-spark-1.3-contributor-free`, `big-pickle`. `exo-free` is deprecated
-upstream and correctly surfaces that error.
-
-## Why this exists
-
-`aid` (github.com/agent-tools-org/ai-dispatch) already orchestrates all three
-CLIs, but its agent contract is explicitly one-shot. From its own error output:
-
-> Task t-9c00f43f uses 'agy' in one-shot print mode and cannot consume
-> interactive input... retry starts a fresh session for agents without resume
-
-So it cannot provide persistent sessions. It remains a good reference for
-worktree isolation and DAG scheduling.
-
-## CLI
-
-```bash
-orch open agy "Remember the code word X. Reply ACK"   # start session + first turn
-orch send <id> "What was the code word?"              # continue, context preserved
-orch ls  [--live]      orch status <id>   orch logs <id>
-orch interrupt <id>    orch close <id>    orch roots   orch cost   orch doctor
-```
-
-Short session ids work everywhere (`orch send 40d4f87a "..."`).
-
-Sessions live in a background daemon, so `open` and `send` are separate
-processes against the same live agent. The daemon is started on demand and
-reaped automatically when its build changes.
-
-## MCP (Claude Code drives this)
-
-Registered at user scope, so it loads in every project. Tools:
-
-`orch_open` `orch_send` `orch_stream` `orch_list` `orch_status`
-`orch_interrupt` `orch_close` `orch_roots` `orch_cost`
-
-## Permissions
+## 🔐 Permissions
 
 **Claude Code's settings are the ceiling.** Workers cannot exceed what Claude
 Code itself is allowed to do.
@@ -143,40 +187,89 @@ an explicit `Edit` allow/deny rule taking precedence.
 agy is genuinely weaker here — `orch status` reports `mediated` rather than
 pretending parity.
 
-## Architecture
+### Worker shell / full permissions (opt-in)
 
-```
-Claude Code ──MCP stdio──┐
-                         ├──► daemon ──► core ──► adapters ──► CLI processes
-terminal ──orch──────────┘    (owns     (store,   claude  (NDJSON)
-                                sessions  queue)   agy     (NDJSON)
-                                                   opencode (HTTP/SSE)
+Headless workers cannot ask a human mid-turn: without a grant, agy auto-denies
+commands and opencode hangs on an unanswered `ask`. To let workers run shell
+commands and edit freely, the owner opts in explicitly:
+
+```bash
+echo '{"workerShell": true}' > ~/.orchestrator/config.json
 ```
 
-- `src/core/` — daemon, client, registry, SQLite store (`~/.orchestrator/orch.db`, WAL), async queue
+It only takes effect when Claude Code's `defaultMode` is `auto` or
+`bypassPermissions`. Then opencode gets `allow` for everything except your
+deny rules and any `deny` narrowings passed on `orch_open` (e.g.
+`["Bash(ssh *)", "Bash(git push *)"]`), which are emitted last so they win.
+agy gets `--dangerously-skip-permissions` (it has no rule list, so state any
+limits in the prompt too). The file is read on every spawn; no restart needed.
+
+### ⏱️ Long turns
+
+`orch_open` / `orch_send` wait at most `ORCH_MAX_WAIT_MS` (default 240000 ms)
+and then return what they have; the turn keeps running in the daemon. Follow it
+with `orch_stream`; `orch_send` answers "session busy" until the turn ends.
+
+## ⚙️ Configuration
+
+| Variable / file | Default | Purpose |
+|---|---|---|
+| `ORCH_PORT` | `47811` | daemon port |
+| `ORCH_MAX_WAIT_MS` | `240000` | longest an MCP call waits before returning (the turn keeps running) |
+| `ORCH_OPENCODE_MODEL` | `opencode/space-bunny-free` | default opencode model |
+| `ORCH_EXTRA_ROOTS` | — | extra directories workers may touch |
+| `ORCH_DEBUG` | — | verbose daemon logging |
+| `~/.orchestrator/config.json` | — | `{"workerShell": true}` opt-in for worker shell / full permissions |
+| `ORCH_DB` (office) | `~/.orchestrator/orch.db` | database the office reads |
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    CC[Claude Code] -- MCP stdio --> MCP[orch MCP server]
+    T[terminal] -- orch CLI --> CLI[orch CLI]
+    MCP --> D[(daemon<br/>127.0.0.1:47811)]
+    CLI --> D
+    D --> S[(SQLite store<br/>~/.orchestrator/orch.db)]
+    D --> A1[claude adapter<br/>NDJSON]
+    D --> A2[agy adapter<br/>stream-json]
+    D --> A3[opencode adapter<br/>HTTP / SSE]
+    S -. read-only .-> O[🕹️ The Office<br/>localhost:4747]
+```
+
+- `src/core/` — daemon, client, registry, SQLite store (WAL), async queue, worktrees
 - `src/adapters/` — one per CLI, all emitting the same event union
 - `src/permissions/` — settings resolution, policy, per-backend translation
 - `src/mcp/`, `src/cli/` — the two surfaces
+- `office/` — the pixel dashboard (zero dependencies)
 
-Normalized events: `session.started`, `text.delta`, `tool.call`, `tool.result`,
-`permission.request`, `turn.completed`, `error`, `turn.started`.
+Normalized events: `session.started`, `turn.started`, `text.delta`, `tool.call`, `tool.result`,
+`permission.request`, `turn.completed`, `error`. Usage is normalized to tokens; `costUsd` is authoritative
+only for claude.
 
-Usage is normalized to tokens. `costUsd` is authoritative only for claude;
-agy reports tokens only, so its cost reads `$0.0000`.
+### Why not an existing dispatcher?
 
-## Tests
+`aid` (github.com/agent-tools-org/ai-dispatch) already orchestrates all three
+CLIs, but its agent contract is explicitly one-shot. From its own error output:
+
+> Task t-9c00f43f uses 'agy' in one-shot print mode and cannot consume
+> interactive input... retry starts a fresh session for agents without resume
+
+So it cannot provide persistent sessions. It remains a good reference for
+worktree isolation and DAG scheduling.
+
+## 🧪 Tests
 
 ```bash
 npm test
 ```
 
-35 tests: permission precedence and narrowing, rule-glob anchoring, root
-confinement, the async-queue and coalescer regressions, NDJSON parsing, store
-round-trips, fixture replays of real captured claude/agy streams, and worktree
-behaviour (isolation, uncommitted diffs, squash-merge, lock refusal, stale
-sweep, branch-name sanitising against `git check-ref-format`).
+35 tests: permission precedence and narrowing, rule-glob anchoring, root confinement, the async-queue and
+coalescer regressions, NDJSON parsing, store round-trips, fixture replays of real captured claude/agy streams,
+and worktree behaviour (isolation, uncommitted diffs, squash-merge, lock refusal, stale sweep, branch-name
+sanitising against `git check-ref-format`).
 
-## Known limits
+## ⚠️ Known limits
 
 - Rate limits surface as `error` with `kind: "rate_limit"` and
   `retryAfterMs`; they are not retried automatically.
@@ -189,3 +282,11 @@ sweep, branch-name sanitising against `git check-ref-format`).
   `error { kind: "api" }` with the provider's message.
 - The three CLIs ship fast. Event schemas are pinned by fixture tests, which
   fail loudly on drift rather than failing silently at runtime.
+## 🤝 Contributing
+
+Issues and PRs are welcome. Please run `npm run typecheck && npm test` before opening a PR, and never commit
+API keys: workers read credentials from each CLI's own config, never from this repo.
+
+## 📄 License
+
+[ISC](LICENSE) © Abdullah Zaki

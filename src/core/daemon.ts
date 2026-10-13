@@ -218,7 +218,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
         worktree: body.worktree === true,
       });
       if (body.prompt) {
-        const events = await collect(ctx, session.id, String(body.prompt));
+        const events = await collectBounded(ctx, session.id, String(body.prompt), MAX_WAIT_MS);
         return json(res, 200, { session, events, log: writeLog(session.id, events) });
       }
       return json(res, 200, { session });
@@ -227,11 +227,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
     case "/send": {
       const sessionId = String(body.sessionId);
       const prompt = String(body.prompt ?? "");
-      const ac = new AbortController();
-      const waitMs = Number(body.waitMs ?? 0);
-      if (waitMs > 0) setTimeout(() => ac.abort(), waitMs).unref?.();
-
-      const events = await collect(ctx, sessionId, prompt, ac.signal);
+      // waitMs bounds how long THIS CALL waits, never the turn. It used to
+      // abort the turn, which SIGINTed the agent (agy then reported an empty
+      // "agy ERROR:"), so any task longer than the wait was killed. Now the
+      // turn keeps running here and the caller follows it with orch_stream.
+      // The wait is also capped below Node fetch's 300 s headers timeout,
+      // which otherwise surfaces client-side as a bare "fetch failed".
+      if (running.has(sessionId)) {
+        const busy: Event[] = [{ t: "error", kind: "crash", message: "session busy: a turn is still running; follow it with orch_stream" }];
+        return json(res, 200, { events: busy, log: writeLog(sessionId, busy) });
+      }
+      const requested = Number(body.waitMs ?? 0);
+      const waitMs = Math.min(requested > 0 ? requested : MAX_WAIT_MS, MAX_WAIT_MS);
+      const events = await collectBounded(ctx, sessionId, prompt, waitMs);
       return json(res, 200, { events, log: writeLog(sessionId, events) });
     }
 
@@ -349,6 +357,41 @@ async function collect(
     events.push(ev);
   }
   return events;
+}
+
+/** Sessions whose turn is still running in the background. */
+const running = new Set<string>();
+const MAX_WAIT_MS = Number(process.env.ORCH_MAX_WAIT_MS ?? 240_000);
+
+/**
+ * Start a turn and wait at most waitMs for it. If it is still going, return
+ * what has arrived so far plus a "still running" note; the turn finishes on
+ * its own and its events land in the store for orch_stream.
+ */
+async function collectBounded(ctx: Ctx, sessionId: string, prompt: string, waitMs: number): Promise<Event[]> {
+  const events: Event[] = [];
+  running.add(sessionId);
+  const done = (async () => {
+    try {
+      for await (const ev of ctx.registry.send({ sessionId, prompt })) events.push(ev);
+    } catch (e) {
+      events.push({ t: "error", kind: "crash", message: String((e as Error)?.message ?? e) });
+    } finally {
+      running.delete(sessionId);
+    }
+    return true;
+  })();
+  let timer: NodeJS.Timeout | undefined;
+  const finished = await Promise.race([
+    done,
+    new Promise<false>((r) => { timer = setTimeout(() => r(false), waitMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (finished) return events;
+  return [
+    ...events,
+    { t: "text.delta", text: `\n[orch] turn still running after ${Math.round(waitMs / 1000)} s; it continues in the daemon. Follow it with orch_stream; orch_send will answer "session busy" until it ends.\n` },
+  ];
 }
 
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {

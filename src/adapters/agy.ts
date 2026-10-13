@@ -148,6 +148,7 @@ export class AgyAdapter implements Adapter {
     const usage: Usage = zeroUsage();
     const coalescer = new DeltaCoalescer(40, (t) => entry.raw.push(normalized({ t: "text.delta", text: t })));
     let turns = 0;
+    let sawText = false;
 
     try {
       for await (const raw of entry.raw) {
@@ -191,7 +192,7 @@ export class AgyAdapter implements Adapter {
           // text_delta on ACTIVE records, others deliver the whole reply on the
           // DONE record. Accept it at any state and flush when the step ends.
           const delta = typeof su.text_delta === "string" ? su.text_delta : "";
-          if (delta) coalescer.push(delta);
+          if (delta) { sawText = true; coalescer.push(delta); }
 
           if (state === "DONE") {
             const flushed = coalescer.flush();
@@ -218,7 +219,17 @@ export class AgyAdapter implements Adapter {
             cacheReadTokens: Number(u.cache_read_tokens ?? usage.cacheReadTokens),
           });
           const tail = coalescer.flush();
-          if (tail) yield { t: "text.delta", text: tail };
+          if (tail) { sawText = true; yield { t: "text.delta", text: tail }; }
+          // Some turns stream nothing and carry the whole reply only here.
+          const response = typeof res.response === "string" ? res.response : "";
+          if (!sawText && response) yield { t: "text.delta", text: response };
+          // Headless agy cannot prompt, so a tool needing approval is
+          // auto-denied and the turn ends quietly. Say so instead.
+          const denied = Array.isArray(res.denied_actions) ? (res.denied_actions as Array<Record<string, unknown>>) : [];
+          if (denied.length) {
+            const names = denied.map((d) => String(d.display_name ?? d.action ?? "?")).join(", ");
+            yield { t: "text.delta", text: `\n[orch] agy auto-denied in headless mode: ${names}\n` };
+          }
           turns = Number(res.num_turns ?? 1);
           const status = String(res.status ?? "SUCCESS");
           if (status !== "SUCCESS") {

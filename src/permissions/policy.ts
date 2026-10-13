@@ -49,6 +49,11 @@ export class Policy {
    * disabled tool cannot be re-enabled. This is what stops the driving model
    * from widening its own permissions by asking for them.
    */
+  /** Caller narrowings (e.g. Bash(ssh *)), so adapters can enforce them natively. */
+  narrowedDeny(): readonly Rule[] {
+    return this.extraDeny;
+  }
+
   narrow(req: NarrowRequest | undefined): this {
     if (!req) return this;
     for (const raw of req.deny ?? []) {

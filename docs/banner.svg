@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1022"/><stop offset="1" stop-color="#1d1a3a"/>
+    </linearGradient>
+    <linearGradient id="t" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffcf5a"/><stop offset="1" stop-color="#ff8a3d"/>
+    </linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#ffffff" stroke-opacity="0.04"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="300" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="300" rx="18" fill="url(#grid)"/>
+  <!-- coordinator node and three workers -->
+  <g stroke="#7c6cff" stroke-width="3" stroke-dasharray="6 6" opacity="0.8">
+    <line x1="960" y1="150" x2="1080" y2="80"/><line x1="960" y1="150" x2="1100" y2="150"/><line x1="960" y1="150" x2="1080" y2="220"/>
+  </g>
+  <rect x="925" y="115" width="70" height="70" rx="12" fill="#ff8a3d"/>
+  <rect x="1062" y="60" width="40" height="40" rx="8" fill="#38d39f"/>
+  <rect x="1082" y="130" width="40" height="40" rx="8" fill="#5aa9ff"/>
+  <rect x="1062" y="200" width="40" height="40" rx="8" fill="#c77dff"/>
+  <text x="80" y="140" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="84" font-weight="800" fill="url(#t)" letter-spacing="6">ORCH OFFICE</text>
+  <text x="84" y="190" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="26" fill="#d6d3ff">Persistent multi-agent sessions for claude · agy · opencode</text>
+  <text x="84" y="228" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="20" fill="#8f8ab8">driven from Claude Code over MCP — with a pixel office to watch them work</text>
+</svg>
