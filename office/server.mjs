@@ -12,6 +12,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4747);
 const DB_PATH = process.env.ORCH_DB ?? join(homedir(), '.orchestrator', 'orch.db');
 const WINDOW_MS = Number(process.env.ARCADE_WINDOW_HOURS ?? 12) * 3600_000;
+// opencode keeps every step's token count in its own database. Read it directly: it is the
+// authoritative figure for opencode workers, and unlike orch.db it updates while a turn runs.
+const OPENCODE_DB = process.env.OPENCODE_DB ?? join(homedir(), '.local', 'share', 'opencode', 'opencode.db');
 
 function db() {
     // A fresh read-only handle per request: the daemon writes in WAL mode, and a
@@ -20,6 +23,34 @@ function db() {
 }
 
 const parse = (s, d = {}) => { try { return JSON.parse(s); } catch { return d; } };
+
+const ZERO = () => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0 });
+
+function openOpencode() {
+    try { return new DatabaseSync(OPENCODE_DB, { readOnly: true }); } catch { return null; }
+}
+
+// Sum the assistant messages of one opencode session, optionally only those created since `sinceMs`.
+function opencodeUsage(oc, nativeId, sinceMs = 0) {
+    const row = oc.prepare(`
+        SELECT COUNT(*) AS steps,
+               COALESCE(SUM(json_extract(data, '$.tokens.input')), 0)       AS input,
+               COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)      AS output,
+               COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0)   AS reasoning,
+               COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0)  AS cacheRead,
+               COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0) AS cacheWrite,
+               COALESCE(SUM(json_extract(data, '$.cost')), 0)               AS cost
+          FROM message
+         WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant' AND time_created >= ?`).get(nativeId, sinceMs);
+    return {
+        steps: Number(row.steps),
+        usage: {
+            inputTokens: Number(row.input), outputTokens: Number(row.output), thinkingTokens: Number(row.reasoning),
+            cacheReadTokens: Number(row.cacheRead), cacheWriteTokens: Number(row.cacheWrite),
+        },
+        costUsd: Number(row.cost),
+    };
+}
 
 function summariseInput(input) {
     if (!input || typeof input !== 'object') return '';
@@ -30,6 +61,7 @@ function summariseInput(input) {
 
 function workers() {
     const h = db();
+    const oc = openOpencode();
     try {
         const since = Date.now() - WINDOW_MS;
         const sessions = h.prepare(
@@ -74,6 +106,21 @@ function workers() {
             else if (lastEv?.t === 'error') state = /rate/i.test(lastEv.kind + lastEv.message) ? 'ratelimited' : 'error';
             else if (running) state = 'working';
             const lastAt = events[events.length - 1]?.at ?? s.updated_at;
+
+            // Usage: opencode's own ledger when we can read it, else what orch recorded at turn end.
+            let usage = { ...ZERO(), ...parse(s.totals) };
+            let costUsd = Number(s.cost_usd ?? 0);
+            let usageSource = 'orch';
+            let currentTurn = null;
+            if (s.tool === 'opencode' && s.native && oc) {
+                try {
+                    const all = opencodeUsage(oc, s.native);
+                    if (all.steps > 0) {
+                        usage = all.usage; costUsd = all.costUsd; usageSource = 'opencode';
+                        if (running) currentTurn = opencodeUsage(oc, s.native, lastTurn.started_at);
+                    }
+                } catch { /* schema drift or locked db: fall back to orch totals */ }
+            }
             return {
                 id: s.id,
                 label: s.label || s.id.slice(0, 8),
@@ -82,7 +129,10 @@ function workers() {
                 cwd: s.cwd.replace(homedir(), '~'),
                 createdAt: s.created_at,
                 closedAt: s.closed_at,
-                totals: parse(s.totals),
+                totals: usage,
+                costUsd,
+                usageSource,
+                currentTurn,
                 state,
                 lastAt,
                 toolCalls,
@@ -96,6 +146,7 @@ function workers() {
         });
     } finally {
         h.close();
+        oc?.close();
     }
 }
 

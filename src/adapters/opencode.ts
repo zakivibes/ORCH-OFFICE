@@ -5,6 +5,7 @@ import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import {
   zeroUsage,
+  addUsage,
   type Adapter,
   type AdapterCaps,
   type Event,
@@ -227,7 +228,11 @@ export class OpencodeAdapter implements Adapter {
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const coalescer = new DeltaCoalescer(40, (t) => entry.events.push(normalized({ t: "text.delta", text: t })));
-    const usage: Usage = zeroUsage();
+    let usage: Usage = zeroUsage();
+    // opencode records one assistant message per step (each tool round-trip), and
+    // message.updated carries that message's own totals. Keep the latest figures
+    // per message and sum them; overwriting kept only the last step of the turn.
+    const perMessage = new Map<string, { usage: Usage; cost: number }>();
     const assistantIds = new Set<string>();
     // opencode sends the *cumulative* text of a part on each update, so we
     // remember what we already emitted per message and send only the suffix.
@@ -318,15 +323,21 @@ export class OpencodeAdapter implements Adapter {
             assistantIds.add(String(info.id));
           }
           const u = (info.tokens ?? info.usage ?? {}) as Record<string, unknown>;
-          if (Object.keys(u).length) {
-            Object.assign(usage, {
-              inputTokens: Number(u.input ?? usage.inputTokens),
-              outputTokens: Number(u.output ?? usage.outputTokens),
-              cacheReadTokens: Number((u.cache as { read?: number } | undefined)?.read ?? usage.cacheReadTokens),
+          if (String(info.role ?? "") === "assistant" && info.id && Object.keys(u).length) {
+            const cache = (u.cache ?? {}) as { read?: number; write?: number };
+            perMessage.set(String(info.id), {
+              usage: {
+                inputTokens: Number(u.input ?? 0),
+                outputTokens: Number(u.output ?? 0),
+                cacheReadTokens: Number(cache.read ?? 0),
+                cacheWriteTokens: Number(cache.write ?? 0),
+                thinkingTokens: Number(u.reasoning ?? 0),
+              },
+              cost: typeof info.cost === "number" ? info.cost : 0,
             });
+            usage = [...perMessage.values()].reduce((acc, m) => addUsage(acc, m.usage), zeroUsage());
+            costUsd = [...perMessage.values()].reduce((acc, m) => acc + m.cost, 0);
           }
-          const c = info.cost;
-          if (typeof c === "number") costUsd = c;
           continue;
         }
 

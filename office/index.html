@@ -38,6 +38,10 @@
   @keyframes pop { from { transform: scale(.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .legend { display: grid; grid-template-columns: 26px 1fr; gap: 6px 8px; margin-top: 10px; }
   @media (max-width: 900px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 58vh 1fr; } aside { border-left: 0; border-top: 3px solid var(--line); } }
+.urow{display:grid;grid-template-columns:96px 1fr 64px;align-items:center;gap:8px;margin:3px 0;font-size:12px}
+.urow i{display:block;height:8px;border-radius:4px;background:linear-gradient(90deg,#7c5cff,#3ddc84);min-width:2px}
+.urow b{text-align:right}
+.utot{margin:4px 0 6px}
 </style>
 </head>
 <body>
@@ -47,7 +51,7 @@
     <span class="stat">On shift<b id="sOnline">0</b></span>
     <span class="stat">Working<b id="sWorking">0</b></span>
     <span class="stat">Tool calls<b id="sCalls">0</b></span>
-    <span class="stat">Tokens out<b id="sTokens">0</b></span>
+    <span class="stat" title="input + cached + output + thinking, all workers in view">Tokens<b id="sTokens">0</b></span>
     <span class="stat">Team morale<b id="sMorale">100%</b></span>
     <span class="stat" id="sConn">● LIVE</span>
   </header>
@@ -375,7 +379,7 @@ function renderPanel() {
     <div class="sec">Level ${lvl} engineer · ${w.toolCalls} tool calls · ${w.turns} turns · morale ${Math.round(morale[w.id] ?? 60)}%</div>
     <div class="bar"><i style="width:${into}%"></i></div>
     <div class="sec">Stats</div>
-    <div>Tokens in <b>${(t.inputTokens || 0).toLocaleString()}</b> · out <b>${(t.outputTokens || 0).toLocaleString()}</b> · thinking <b>${(t.thinkingTokens || 0).toLocaleString()}</b></div>
+    ${usageBlock(w)}
     <div class="hint">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
     <div class="sec">Live activity</div>
     <div class="feed">${w.feed.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>
@@ -383,6 +387,29 @@ function renderPanel() {
     <div class="sec">Current orders</div><pre>${esc(w.lastPrompt)}</pre>
     ${w.task !== w.lastPrompt ? `<div class="sec">Original job</div><pre>${esc(w.task)}</pre>` : ''}
     <div class="sec">Session</div><div class="hint">${esc(w.id)}</div>`;
+}
+
+// Token totals, split the way providers bill them. "Processed" = everything the model read or
+// wrote; cached input is re-read context (cheap, often free) and dominates long agentic turns.
+const n = (x) => Number(x || 0);
+const fmtTok = (x) => x >= 1e6 ? (x / 1e6).toFixed(2) + 'M' : x >= 1e3 ? (x / 1e3).toFixed(1) + 'k' : String(x);
+const processed = (t) => n(t.inputTokens) + n(t.cacheReadTokens) + n(t.cacheWriteTokens) + n(t.outputTokens) + n(t.thinkingTokens);
+function usageRows(t) {
+  const rows = [
+    ['Fresh input', n(t.inputTokens)], ['Cached input', n(t.cacheReadTokens) + n(t.cacheWriteTokens)],
+    ['Output', n(t.outputTokens)], ['Thinking', n(t.thinkingTokens)],
+  ];
+  const max = Math.max(1, ...rows.map((r) => r[1]));
+  return rows.map(([k, v]) => `<div class="urow"><span>${k}</span><i style="width:${(v / max) * 100}%"></i><b title="${v.toLocaleString()}">${fmtTok(v)}</b></div>`).join('');
+}
+function usageBlock(w) {
+  const t = w.totals || {}, src = w.usageSource === 'opencode'
+    ? 'live from opencode\'s own ledger (every step, updates mid-turn)'
+    : (w.tool === 'agy' ? 'reported by agy at the end of each turn' : 'recorded by orch at the end of each turn');
+  const cur = w.currentTurn && w.currentTurn.steps
+    ? `<div class="hint">This turn so far: ${w.currentTurn.steps} steps · ${fmtTok(processed(w.currentTurn.usage))} processed · ${fmtTok(n(w.currentTurn.usage.outputTokens))} out</div>` : '';
+  return `<div class="utot"><b>${fmtTok(processed(t))}</b> tokens processed · <b>${fmtTok(n(t.outputTokens) + n(t.thinkingTokens))}</b> generated${w.costUsd ? ` · $${w.costUsd.toFixed(4)}` : ''}</div>
+    ${usageRows(t)}${cur}<div class="hint">Source: ${src}</div>`;
 }
 
 function toast(msg) {
@@ -403,7 +430,7 @@ async function poll() {
     document.getElementById('sOnline').textContent = live.length;
     document.getElementById('sWorking').textContent = live.filter((w) => w.state === 'working').length;
     document.getElementById('sCalls').textContent = data.workers.reduce((a, w) => a + w.toolCalls, 0);
-    document.getElementById('sTokens').textContent = data.workers.reduce((a, w) => a + (w.totals?.outputTokens || 0), 0).toLocaleString();
+    document.getElementById('sTokens').textContent = fmtTok(data.workers.reduce((a, w) => a + processed(w.totals || {}), 0));
     updateMorale();
     if (selected || first) renderPanel();
     lastOk = Date.now();
