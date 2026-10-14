@@ -162,6 +162,26 @@
         <button onclick="closeOrchModal()" style="background:#1b1b2a; padding:8px 14px;">İptal</button>
         <button id="btnLaunchOrch" onclick="launchOrchestra()" style="background:#2d4a22; border-color:#3ddc84; color:#3ddc84; font-weight:700; font-size:14px; padding:8px 20px;">🚀 Orkestrayı Başlat</button>
       </div>
+  </div>
+</div>
+
+<!-- Modal: Evden İşe Geliş / Loading Ekranı -->
+<div id="commuteModal" style="display:none; position:fixed; inset:0; background:rgba(5,5,10,0.88); z-index:10000; align-items:center; justify-content:center; backdrop-filter:blur(6px);">
+  <div style="background:#141424; border:3px solid var(--gold); border-radius:12px; width:560px; max-width:92vw; padding:24px; display:flex; flex-direction:column; gap:16px; box-shadow:0 12px 48px rgba(0,0,0,0.95); text-align:center;">
+    <div style="font-family:'Press Start 2P', monospace; font-size:14px; color:var(--gold); line-height:1.6;">
+      🚕 MESAİ BAŞLIYOR...
+    </div>
+    <div style="font-size:13px; color:var(--dim); margin-top:-6px;">
+      Çalışanlar evden çıkıp ofise doğru yola koyuldu!
+    </div>
+    
+    <!-- Workers Arrival Tracker List -->
+    <div id="commuteList" style="display:flex; flex-direction:column; gap:10px; margin:10px 0; text-align:left; max-height:280px; overflow-y:auto; padding-right:4px;">
+    </div>
+
+    <!-- Overall Progress Status -->
+    <div id="commuteStatus" style="font-size:13px; font-weight:600; color:var(--ink); padding:8px; background:#1b1b30; border-radius:6px; border:1px solid var(--line);">
+      Hazırlanıyor...
     </div>
   </div>
 </div>
@@ -789,30 +809,96 @@ async function saveOrchConfig() {
 
 async function launchOrchestra() {
   const payload = collectOrchForm();
-  const btn = document.getElementById('btnLaunchOrch');
-  btn.disabled = true;
-  btn.textContent = '⏳ Başlatılıyor...';
-  toast('Orkestra kuruluyor, çalışanlar masalarına oturuyor...');
+  if (!payload.workers.length) {
+    alert("Lütfen en az bir çalışan ekleyin.");
+    return;
+  }
+
+  // 1. Setup modalını kapat, Evden İşe Geliş modalını aç
+  closeOrchModal();
+  const cModal = document.getElementById('commuteModal');
+  const cList = document.getElementById('commuteList');
+  const cStatus = document.getElementById('commuteStatus');
+  cModal.style.display = 'flex';
+  cList.innerHTML = '';
+  cStatus.textContent = 'Çalışanlara haber veriliyor...';
+
+  // Ayarları arka planda kaydet
   try {
-    const r = await fetch('/api/orchestra/launch', {
+    await fetch('/api/orchestra/save', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const j = await r.json();
-    if (j.ok) {
-      toast('Orkestra başarıyla başlatıldı! 🚀');
-      closeOrchModal();
-      setTimeout(poll, 1000);
-    } else {
-      throw new Error(j.error || 'Başlatılamadı');
+  } catch {}
+
+  // Listede çalışan kartlarını oluştur
+  const workerItems = payload.workers.map((w) => {
+    const card = document.createElement('div');
+    card.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:#0e0e1a; border:1px solid var(--line); border-radius:6px; padding:10px 14px;';
+    card.innerHTML = `
+      <div>
+        <b style="color:var(--ink); font-size:13px;">${w.label}</b>
+        <div style="font-size:11px; color:var(--dim); font-family:ui-monospace,monospace;">${w.model || w.tool}</div>
+      </div>
+      <div class="c-step" style="font-size:12.5px; font-weight:600; color:var(--warn);">🏠 Evden çıktı...</div>
+    `;
+    cList.appendChild(card);
+    return { card, step: card.querySelector('.c-step'), worker: w };
+  });
+
+  // Her çalışanı sırayla ve hızlıca aç (kapıdan içeri girme animasyonuyla)
+  for (let i = 0; i < workerItems.length; i++) {
+    const item = workerItems[i];
+    item.step.textContent = '🚌 Yolda geliyor...';
+    item.step.style.color = 'var(--gold)';
+    cStatus.textContent = `${item.worker.label} ofise geliyor (${i + 1}/${workerItems.length})...`;
+
+    try {
+      const res = await fetch('/api/orchestra/launch-worker', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ worker: item.worker, cwd: payload.cwd }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        item.step.textContent = '💼 Masasına oturdu! ✓';
+        item.step.style.color = '#3ddc84';
+        item.card.style.borderColor = '#1f5a3f';
+        toast(`🚪 ${item.worker.label} ofise ulaştı!`);
+        poll(); // Anında canvası güncelle, piksel karakter kapıdan yürüsün
+      } else {
+        item.step.textContent = '❌ ' + (data.error || 'Açılamadı');
+        item.step.style.color = 'var(--err)';
+      }
+    } catch (e) {
+      item.step.textContent = '❌ Bağlantı hatası';
+      item.step.style.color = 'var(--err)';
     }
-  } catch (e) {
-    toast('Hata: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🚀 Orkestrayı Başlat';
+
+    // Doğal bir akış için çalışanlar arası kısa bekleme
+    await new Promise((r) => setTimeout(r, 600));
   }
+
+  // Tüm çalışanlar geldiğinde koordinatör terminalini aç
+  if (payload.coordinator?.autoOpenTerminal !== false) {
+    cStatus.textContent = '🚀 Baş Koordinatör Terminali açılıyor...';
+    try {
+      await fetch('/api/orchestra/open-terminal', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ coordinator: payload.coordinator, cwd: payload.cwd }),
+      });
+    } catch {}
+  }
+
+  cStatus.innerHTML = '<span style="color:#3ddc84; font-weight:700;">🎉 TÜM EKİP OFİSTE! İYİ ÇALIŞMALAR, PATRON!</span>';
+  toast('Tüm çalışanlar masalarına oturdu! 🚀');
+  poll();
+
+  setTimeout(() => {
+    cModal.style.display = 'none';
+  }, 2000);
 }
 
 async function stopOrchestra() {

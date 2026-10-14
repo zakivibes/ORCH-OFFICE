@@ -342,6 +342,49 @@ createServer(async (req, res) => {
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true }));
         }
+        if (url.pathname === '/api/orchestra/launch-worker' && req.method === 'POST') {
+            const body = await readBodyJson(req);
+            const w = body.worker || {};
+            const cwd = body.cwd || "D:\\OffHours";
+            try {
+                const resOpen = await callDaemon('/open', {
+                    tool: w.tool,
+                    cwd,
+                    roots: [cwd],
+                    label: w.label,
+                    model: w.model || undefined,
+                });
+                res.writeHead(200, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ ok: true, session: resOpen.session }));
+            } catch (e) {
+                res.writeHead(500, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ ok: false, error: e.message }));
+            }
+        }
+        if (url.pathname === '/api/orchestra/open-terminal' && req.method === 'POST') {
+            const body = await readBodyJson(req);
+            const cwd = body.cwd || "D:\\OffHours";
+            const coordinator = body.coordinator || {};
+            const coordModel = coordinator.model;
+            const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
+            if (process.platform === 'win32') {
+                try {
+                    const term = spawn('cmd.exe', ['/c', 'start', 'wt.exe', '-d', cwd, 'powershell.exe', '-NoExit', '-Command', cmd], {
+                        detached: true,
+                        stdio: 'ignore'
+                    });
+                    term.unref();
+                } catch {
+                    const term = spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit', '-Command', `Set-Location '${cwd}'; ${cmd}`], {
+                        detached: true,
+                        stdio: 'ignore'
+                    });
+                    term.unref();
+                }
+            }
+            res.writeHead(200, { 'content-type': 'application/json' });
+            return res.end(JSON.stringify({ ok: true }));
+        }
         if (url.pathname === '/api/orchestra/launch' && req.method === 'POST') {
             const body = await readBodyJson(req);
             const cwd = body.cwd || "D:\\OffHours";
@@ -362,7 +405,6 @@ createServer(async (req, res) => {
                         roots: [cwd],
                         label: w.label,
                         model: w.model || undefined,
-                        prompt: w.prompt || "Hazır ol ve bekle."
                     });
                     started.push({ id: resOpen.session.id, label: w.label, ok: true });
                 } catch (e) {
@@ -372,14 +414,16 @@ createServer(async (req, res) => {
 
             const openTerm = body.coordinator?.autoOpenTerminal !== false;
             if (openTerm && process.platform === 'win32') {
+                const coordModel = body.coordinator?.model;
+                const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
                 try {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'wt.exe', '-d', cwd, 'powershell.exe', '-NoExit', '-Command', 'opencode'], {
+                    const term = spawn('cmd.exe', ['/c', 'start', 'wt.exe', '-d', cwd, 'powershell.exe', '-NoExit', '-Command', cmd], {
                         detached: true,
                         stdio: 'ignore'
                     });
                     term.unref();
                 } catch {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit', '-Command', `Set-Location '${cwd}'; opencode`], {
+                    const term = spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit', '-Command', `Set-Location '${cwd}'; ${cmd}`], {
                         detached: true,
                         stdio: 'ignore'
                     });
