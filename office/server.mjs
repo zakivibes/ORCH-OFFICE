@@ -86,6 +86,7 @@ function agyTranscript(nativeId) {
                 usage: { inputTokens: Number(r.input_tokens || 0), outputTokens: Number(r.output_tokens || 0), cacheReadTokens: Number(r.cache_read_tokens || 0),
                          cacheWriteTokens: 0, thinkingTokens: Number(r.thinking_tokens || 0) },
                 thought: r.type === 'PLANNER_RESPONSE' && r.thinking ? String(r.thinking).trim().split('\n').filter(Boolean)[0]?.slice(0, 220) : null,
+                error: r.type === 'ERROR_MESSAGE' && r.error ? String(r.error).slice(0, 300) : null,
             });
         }
         const data = { steps, mtimeMs: st.mtimeMs };
@@ -241,6 +242,7 @@ function worker(h, oc, s, now) {
                     if (t.file) files.set(t.file, st.at);
                 }
                 if (st.thought) tfeed.push({ kind: 'think', at: st.at, name: 'thinking', detail: st.thought });
+                if (st.error) tfeed.push({ kind: 'error', at: st.at, name: 'model error', detail: st.error });
             }
             // merge with orch's own feed (said / errors / turn ends), newest last
             const merged = [...feed.filter((f) => f.kind !== 'tool'), ...tfeed].sort((a, b) => a.at - b.at);
