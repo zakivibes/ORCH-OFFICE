@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { toOpencodePermission, workerMcpConfig } from "../permissions/translate.js";
+import { toOpencodePermission, workerMcpConfig, workerEnvConfig } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import { resolveBinary } from "../core/bin.js";
@@ -96,7 +96,7 @@ export class OpencodeAdapter implements Adapter {
       process.stderr.write(`[opencode cfg] ${inline}\n`);
     }
 
-    const childEnv: NodeJS.ProcessEnv = { ...process.env, OPENCODE_CONFIG_CONTENT: inline };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...workerEnvConfig(), OPENCODE_CONFIG_CONTENT: inline };
     delete childEnv.OPENCODE_SERVER_PASSWORD;
     delete childEnv.OPENCODE_SERVER_USERNAME;
 
@@ -248,6 +248,10 @@ export class OpencodeAdapter implements Adapter {
     // opencode sends the *cumulative* text of a part on each update, so we
     // remember what we already emitted per message and send only the suffix.
     const emitted = new Map<string, string>();
+    // opencode re-sends a tool part on every state change (pending -> running -> completed), so one
+    // call arrives several times. Report it once, when its input is known, or the turn's step count
+    // (and the maxTurnSteps budget) triples.
+    const toolCallsSeen = new Set<string>();
     const startedAt = Date.now();
     let costUsd = 0;
     let turns = 0;
@@ -306,13 +310,20 @@ export class OpencodeAdapter implements Adapter {
             continue;
           }
           if (ptype === "tool" || ptype === "tool-invocation") {
+            const callId = String(part.callID ?? part.id ?? "");
+            const state = part.state as { status?: string; input?: unknown } | undefined;
+            const input = state?.input ?? (part.input as unknown) ?? {};
+            const known = input && typeof input === "object" && Object.keys(input).length > 0;
+            if (callId && toolCallsSeen.has(callId)) continue;
+            if (state?.status === "pending" && !known) continue;
+            if (callId) toolCallsSeen.add(callId);
             const flushed = coalescer.flush();
             if (flushed) yield { t: "text.delta", text: flushed };
             yield {
               t: "tool.call",
-              id: String(part.callID ?? part.id ?? ""),
+              id: callId,
               name: String(part.tool ?? part.name ?? "tool"),
-              input: (part.state as { input?: unknown } | undefined)?.input ?? (part.input as unknown) ?? {},
+              input,
             };
             continue;
           }

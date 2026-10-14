@@ -58,6 +58,28 @@ export function workerMcpConfig(): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * Extra environment for opencode workers, from `workerEnv` in ~/.orchestrator/config.json.
+ * Used for opencode's own switches, e.g. OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 stops it
+ * listing every installed Claude skill in each worker's prompt (a few thousand tokens a step).
+ */
+export function workerEnvConfig(): Record<string, string> {
+  try {
+    const cfg = JSON.parse(readFileSync(join(homedir(), ".orchestrator", "config.json"), "utf8")) as {
+      workerEnv?: unknown;
+    };
+    const out: Record<string, string> = {};
+    if (cfg.workerEnv && typeof cfg.workerEnv === "object") {
+      for (const [k, v] of Object.entries(cfg.workerEnv as Record<string, unknown>)) {
+        if (/^[A-Z_][A-Z0-9_]*$/.test(k) && (typeof v === "string" || typeof v === "number")) out[k] = String(v);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** Claude Code tool name -> opencode permission key. */
 const CLAUDE_TO_OPENCODE: Record<string, string> = {
   Bash: "bash",
