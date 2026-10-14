@@ -84,6 +84,34 @@
   .feed .say b { color: #c9b6ff; } .feed .say { color: #cfcde8; }
   .files div { font: 12.5px ui-monospace, Menlo, monospace; padding: 3px 0; border-bottom: 1px dashed #2a2a44; word-break: break-all; }
   svg.spark { vertical-align: middle; }
+  .ppill { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px; vertical-align: middle; }
+  .night-chip { background: #1a1040; border: 1px solid #7c5cff; border-radius: 6px; padding: 4px 12px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .night-chip.active { background: #2a1a5a; border-color: #c9b6ff; color: #c9b6ff; }
+  .card.night { background: linear-gradient(135deg, #12102a 0%, #1a1035 100%); border-color: #4a3a7a; position: relative; overflow: hidden; }
+  .card.night::before { content: ''; position: absolute; inset: 0; opacity: .06; background: radial-gradient(1px 1px at 10% 20%, #fff, transparent), radial-gradient(1px 1px at 30% 60%, #fff, transparent), radial-gradient(1px 1px at 60% 40%, #fff, transparent), radial-gradient(1px 1px at 80% 70%, #fff, transparent), radial-gradient(1px 1px at 45% 15%, #fff, transparent), radial-gradient(2px 2px at 70% 25%, #cce, transparent); border-radius: 8px; pointer-events: none; }
+  .card.night:hover { border-color: #7c5cff; box-shadow: 0 0 12px rgba(120, 90, 255, .25); }
+  .card.night-muted { background: #13132a; border-color: #2a2a4a; }
+  .card.night-muted .nm-note { font-size: 10.5px; color: var(--dim); }
+  .row.night { background: #14122c; }
+  .row.night:hover td { background: #1e1c38; }
+  .night-label { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #3a2a6a; color: #c9b6ff; vertical-align: middle; margin-left: 6px; }
+  .nm-note { font-size: 10.5px; color: var(--dim); margin-left: 6px; }
+  .chat { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .msg { align-self: flex-start; max-width: 96%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px; }
+  .msg.you { align-self: flex-end; border-color: var(--agy); }
+  .msg.worker { align-self: flex-start; border-color: var(--opencode); }
+  .msg.running { box-shadow: 0 0 8px rgba(61, 220, 132, .18); }
+  .msg .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--dim); margin-bottom: 5px; }
+  .msg .txt { white-space: pre-wrap; word-break: break-word; font: 11.5px/1.35 ui-monospace, Menlo, monospace; max-height: 16.2em; overflow: hidden; }
+  .msg.running .txt { color: var(--opencode); }
+  .msg.open .txt { max-height: none; overflow: visible; }
+  .msg .acts { display: flex; gap: 5px; justify-content: flex-end; margin-top: 6px; }
+  .msg .acts button { padding: 2px 7px; font-size: 11px; }
+  .orch-note { color: var(--dim); font-style: italic; border-left: 2px solid var(--line); padding-left: 5px; }
+  .typing { color: var(--opencode); font-weight: 700; }
+  .thinkbox { border-top: 1px dashed var(--line); margin-top: 7px; padding-top: 5px; }
+  .thinkbox > button { width: 100%; text-align: left; padding: 3px 6px; font-size: 11px; }
+  .thinktxt { max-height: 130px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--dim); font: 11px/1.35 ui-monospace, Menlo, monospace; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -102,6 +130,7 @@
     <span class="stat" title="new (uncached) input">Fresh in<b id="sFresh">0</b></span>
     <span class="stat">Morale<b id="sMorale">100%</b></span>
     <span class="spacer"></span>
+    <span id="sDiscount" class="night-chip" style="display:none"></span>
     <select id="win" title="which workers to count">
       <option value="live">On shift only</option><option value="1">Last 1 h</option><option value="6">Last 6 h</option>
       <option value="12">Last 12 h</option><option value="24">Last 24 h</option><option value="168">Last 7 days</option>
@@ -199,6 +228,8 @@ const TOOL_ICON = { read: '📖', view_file: '📖', glob: '🗂', list: '🗂',
   find_by_name: '🔍', edit: '✏️', write: '📝', write_to_file: '📝', replace_file_content: '✏️', bash: '⌨️', run_command: '⌨️',
   task: '🤝', todowrite: '✅', webfetch: '🌐' };
 const hash = (s) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+const PROV_PALETTE = ['#7c5cff', '#4aa3ff', '#3ddc84', '#ff9f43', '#ff6b8b', '#f9c74f', '#5cdbd3', '#f759ab', '#36cfc9', '#b37feb'];
+const providerColor = (p) => PROV_PALETTE[hash(String(p)) % PROV_PALETTE.length];
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 let morale = store.get('orch.morale', {});        // id -> 0..100, cosmetic only
@@ -425,7 +456,12 @@ function drawCat() {
   if (cat.wait > 0 && cat.wait % 200 < 40) label('zz', x + 4, y - 7, { size: 11, color: '#a19ec8', outline: false });
 }
 
-function shortModel(w) { return `${w.tool} · ${String(w.model || '').replace(/^.*\//, '').replace('-free', '')}`.slice(0, 30); }
+function shortModel(w) {
+  // Desks sit ~26 characters apart at this size; longer ids (nemotron-3-super-120b-a12b) ran into the next desk.
+  const m = String(w.model || '').replace(/^.*\//, '').replace('-free', '').replace(/-\d+b(-a\d+b)?$/, '');
+  const s = `${w.tool} · ${m}`;
+  return s.length > 26 ? s.slice(0, 25) + '…' : s;
+}
 
 function frame() {
   tick++;
@@ -510,6 +546,8 @@ if (qp.get('view')) ui.view = qp.get('view');
 if (qp.get('tab')) ui.tab = qp.get('tab');
 const wantWorker = qp.get('w');
 let paused = false;
+let convCache = { id: null, worker: null, at: 0 }, convFetchingId = null, convSeq = 0;
+const convExpand = new Set(), convThink = new Set();
 function visible() { return ui.win === 'live' ? data.workers.filter((w) => w.state !== 'gone') : data.workers; }
 
 function setView(v) {
@@ -580,8 +618,9 @@ function renderDash() {
   // live turns
   const liveCards = live.map((w) => {
     const c = w.current || {};
-    return `<div class="card ${w.stalled ? 'stall' : ''}" onclick="pick('${w.id}')">
-      <h3><span>${STATE_DOT(w)}<span style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</span></span>${w.stalled ? '<span class="tag warn">quiet ' + ago(w.lastAt).replace(' ago', '') + '</span>' : ''}</h3>
+    const nightCls = w.discount?.active ? ' night' : (w.discount ? ' night-muted' : '');
+    return `<div class="card${nightCls} ${w.stalled ? 'stall' : ''}" onclick="pick('${w.id}')">
+      <h3><span>${STATE_DOT(w)}<span style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</span></span>${w.providerName ? '<span class="ppill" style="color:' + providerColor(w.provider) + ';border:1px solid ' + providerColor(w.provider) + '">' + esc(w.providerName) + '</span>' : ''}${w.stalled ? '<span class="tag warn">quiet ' + ago(w.lastAt).replace(' ago', '') + '</span>' : ''}${w.discount?.active ? '<span class="night-label">🌙 ' + esc(w.discount.label) + '</span>' : (w.discount ? '<span class="nm-note">' + esc(w.discount.label) + ' ' + esc(w.discount.from) + '–' + esc(w.discount.to) + '</span>' : '')}</h3>
       <div class="big" data-since="${c.startedAt}">${dur(nowS() - c.startedAt)}</div>
       <div class="row"><span>steps · tool calls</span><b>${c.steps || '—'} · ${c.toolCalls ?? 0}</b></div>
       <div class="row"><span>tokens this turn</span><b>${c.source === 'none' ? 'at turn end' : fmtTok(processed(c.usage))}</b></div>
@@ -593,8 +632,10 @@ function renderDash() {
   const col = COLS.find((c) => c[0] === ui.sort) || COLS[6];
   const rows = [...ws].sort((a, b) => { const x = col[2](a), y = col[2](b); return (x > y ? 1 : x < y ? -1 : 0) * ui.dir; });
   const sum = (f) => ws.reduce((a, w) => a + f(w), 0);
-  const tr = rows.map((w) => `<tr class="row ${selected === w.id ? 'sel' : ''}" onclick="pick('${w.id}')">
-      <td>${STATE_DOT(w)}${esc(w.label)}${w.stalled ? ' <span class="tag warn">quiet</span>' : ''}</td>
+  const tr = rows.map((w) => {
+      const nightRow = w.discount?.active ? ' night' : '';
+      return `<tr class="row${nightRow} ${selected === w.id ? 'sel' : ''}" onclick="pick('${w.id}')">
+      <td>${STATE_DOT(w)}${esc(w.label)}${w.stalled ? ' <span class="tag warn">quiet</span>' : ''}${w.providerName ? '<span class="ppill" style="color:' + providerColor(w.provider) + ';border:1px solid ' + providerColor(w.provider) + '">' + esc(w.providerName) + '</span>' : ''}${w.discount?.active ? '<span class="night-label">🌙 ' + esc(w.discount.label) + '</span>' : (w.discount ? '<span class="nm-note">' + esc(w.discount.label) + ' ' + esc(w.discount.from) + '–' + esc(w.discount.to) + '</span>' : '')}</td>
       <td class="l"><span style="color:${COLORS[w.tool] || '#fff'}">${esc(w.tool)}</span> <span class="hint">${esc(String(w.model).replace(/^.*\//, ''))}</span></td>
       <td class="l">${esc(w.state)}</td>
       <td ${w.current ? `data-since="${w.current.startedAt}"` : ''}>${w.current ? dur(nowS() - w.current.startedAt) : '—'}</td>
@@ -604,7 +645,7 @@ function renderDash() {
       <td>${fmtTok(generated(w.totals))}</td><td>${fmtTok(w.totals?.inputTokens)}</td><td>${fmtTok(cached(w.totals))}</td>
       <td>${w.current?.tokensPerMin ? fmtTok(w.current.tokensPerMin) : '—'}</td>
       <td>${ago(w.lastAt)}</td>
-      <td>${spark(w.turnRows.map((t) => processed(t.usage)), 90, 22, COLORS[w.tool])}</td></tr>`).join('');
+      <td>${spark(w.turnRows.map((t) => processed(t.usage)), 90, 22, COLORS[w.tool])}</td></tr>`; }).join('');
   const head = COLS.map(([k, label, , cls]) => `<th class="${cls || ''}" onclick="sortBy('${k}')">${label}${ui.sort === k ? (ui.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') + '<th>Per-turn trend</th>';
   const foot = `<tr><td>Total · ${ws.length} workers</td><td></td><td></td><td></td><td>${sum((w) => w.turns)}</td><td>${sum((w) => w.toolCalls).toLocaleString()}</td>
       <td>${fmtTok(sum((w) => processed(w.totals)))}</td><td></td><td>${fmtTok(sum((w) => generated(w.totals)))}</td><td>${fmtTok(sum((w) => n(w.totals?.inputTokens)))}</td>
@@ -660,6 +701,73 @@ function liveBlock(w) {
     ${w.lastText ? `<div class="said" style="margin-top:6px">💬 ${esc(w.lastText)}</div>` : ''}</div>`;
 }
 
+function refreshConversation(id) {
+  if (!id || convFetchingId === id) return;
+  if (convCache.id === id && convCache.worker && Date.now() - convCache.at < 2200) return;
+  const seq = ++convSeq;
+  convFetchingId = id;
+  fetch(`/api/worker?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((j) => {
+      if (seq === convSeq && j && !j.error && selected === id && ui.tab === 'conversation') {
+        convCache = { id, worker: j, at: Date.now() };
+        renderPanel();
+      }
+    })
+    .catch(() => {})
+    .finally(() => { if (seq === convSeq) convFetchingId = null; });
+}
+function chatText(s) {
+  return String(s || '').split('\n').map((l) => /^\s*\[orch\b/i.test(l) ? `<span class="orch-note">${esc(l)}</span>` : esc(l)).join('\n');
+}
+function chatThinking(key, text) {
+  const open = convThink.has(key);
+  return `<div class="thinkbox"><button data-key="${key}" onclick="toggleThink(this)">${open ? '▼' : '▶'} thinking</button><div class="thinktxt" style="display:${open ? 'block' : 'none'}">${esc(text)}</div></div>`;
+}
+function chatMsg(key, cls, who, meta, text, extra = '') {
+  const raw = String(text || '');
+  const long = raw.split('\n').length > 12 || raw.length > 1800;
+  const open = !long || convExpand.has(key);
+  return `<div class="msg ${cls}${open ? ' open' : ''}"><div class="meta"><span>${esc(who)}</span><span>${meta}</span></div><div class="txt">${chatText(raw)}</div><div class="acts">${long ? `<button data-key="${key}" onclick="toggleChat(this)">${open ? 'collapse' : 'show all'}</button>` : ''}<button onclick="copyChat(this)">copy</button></div>${extra}</div>`;
+}
+function chatTime(t) {
+  return t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+}
+function chatMeta(t, running) {
+  const tok = processed(t.usage) ? `${fmtTok(processed(t.usage))} processed` : '— processed';
+  return `#${t.n} · ${chatTime(t.startedAt)} · ${tok}${running ? ' · <span class="typing">typing…</span>' : ''}${t.aborted ? ' · <span class="warn" title="aborted">⛔</span>' : ''}`;
+}
+function conversationBody(w) {
+  refreshConversation(w.id);
+  const detail = convCache.id === w.id ? convCache.worker : null;
+  const turns = detail?.conversation || [];
+  if (!turns.length) return `<div class="chat"><div class="hint">${convFetchingId === w.id ? 'Loading conversation…' : 'No conversation yet.'}</div></div>`;
+  return `<div class="chat">${turns.map((t) => {
+    const running = !t.endedAt;
+    const pkey = `${w.id}:${t.n}:p`, rkey = `${w.id}:${t.n}:r`;
+    const reply = t.reply || (running ? 'typing…' : '(no reply)');
+    const think = t.thinking ? chatThinking(`${rkey}:think`, t.thinking) : '';
+    return chatMsg(pkey, 'you', `You → ${w.label}`, `#${t.n} · ${chatTime(t.startedAt)}`, t.prompt) +
+      chatMsg(rkey, running ? 'worker running' : 'worker', `${w.label} (${w.model})`, chatMeta(t, running), reply, think);
+  }).join('')}</div>`;
+}
+function toggleChat(btn) {
+  const msg = btn.closest('.msg'), key = btn.dataset.key, open = msg.classList.toggle('open');
+  if (open) convExpand.add(key); else convExpand.delete(key);
+  btn.textContent = open ? 'collapse' : 'show all';
+}
+function toggleThink(btn) {
+  const box = btn.nextElementSibling, key = btn.dataset.key, open = box.style.display !== 'none';
+  box.style.display = open ? 'none' : 'block';
+  if (open) convThink.delete(key); else convThink.add(key);
+  btn.textContent = `${open ? '▶' : '▼'} thinking`;
+}
+function copyChat(btn) {
+  const text = btn.closest('.msg')?.querySelector('.txt')?.textContent ?? '';
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('📋 copied')).catch(() => toast('copy failed'));
+  else toast('copy failed');
+}
+
 function renderPanel() {
   const p = document.getElementById('panel');
   const w = data.workers.find((x) => x.id === selected);
@@ -679,7 +787,7 @@ function renderPanel() {
       ${gone.map((g) => `<div style="cursor:pointer" onclick="pick('${g.id}')">🏁 <b>${esc(g.label)}</b> <span class="hint">· ${esc(g.tool)} · ${g.toolCalls} calls · ${fmtTok(processed(g.totals))} · ${ago(g.lastAt)}</span></div>`).join('') || '<div class="hint">none yet</div>'}`;
     return;
   }
-  const TABS = [['overview', 'Overview'], ['activity', 'Activity'], ['turns', `Turns (${w.turns})`], ['files', `Files (${w.files.length})`], ['orders', 'Orders']];
+  const TABS = [['overview', 'Overview'], ['conversation', 'Conversation'], ['activity', 'Activity'], ['turns', `Turns (${w.turns})`], ['files', `Files (${w.files.length})`], ['orders', 'Orders']];
   let body = '';
   if (ui.tab === 'overview') {
     const bd = Object.entries(w.breakdown || {}).sort((a, b) => b[1] - a[1]);
@@ -689,6 +797,8 @@ function renderPanel() {
       <div class="sec">Tool calls · ${w.toolCalls.toLocaleString()}</div>${bars(bd, (v) => v.toLocaleString()) || '<span class="hint">none recorded</span>'}
       <div class="hint" style="margin-top:10px">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
       ${w.state !== 'gone' ? `<div class="btns"><button onclick="cheer('${w.id}','praise')">👏 Praise</button><button onclick="cheer('${w.id}','coffee')">☕ Buy coffee</button></div>` : ''}`;
+  } else if (ui.tab === 'conversation') {
+    body = conversationBody(w);
   } else if (ui.tab === 'activity') {
     const kinds = { all: null, tool: ['tool'], say: ['say'], issues: ['error', 'perm'] };
     const f = kinds[ui.feed] ? w.feed.filter((e) => kinds[ui.feed].includes(e.kind)) : w.feed;
@@ -709,13 +819,16 @@ function renderPanel() {
       ${w.task !== w.lastPrompt ? `<div class="sec">Original job</div><pre>${esc(w.task)}</pre>` : ''}`;
   }
   const keep = p.scrollTop;
-  p.innerHTML = `<h2 style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</h2>
-    <span class="pill">${STATE_DOT(w)}${STATE_LABEL[w.state] || w.state}</span><span class="pill">${esc(w.tool)}</span><span class="pill">${esc(w.model)}</span>
+  const chatBottom = p.scrollHeight - p.scrollTop - p.clientHeight < 32;
+  const stickChat = ui.tab === 'conversation' && (p.dataset.chat !== w.id || chatBottom);
+  p.innerHTML = `<h2 style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}${w.providerName ? '<span class="ppill" style="font-size:12px;color:' + providerColor(w.provider) + ';border:1px solid ' + providerColor(w.provider) + '">' + esc(w.providerName) + '</span>' : ''}</h2>
+    <span class="pill">${STATE_DOT(w)}${STATE_LABEL[w.state] || w.state}</span><span class="pill">${esc(w.tool)}</span><span class="pill">${esc(w.model)}</span>${w.discount?.active ? '<span class="night-label">🌙 ' + esc(w.discount.label) + '</span>' : (w.discount ? '<span class="nm-note" style="font-size:11px;margin-left:4px">' + esc(w.discount.label) + ' ' + esc(w.discount.from) + '–' + esc(w.discount.to) + '</span>' : '')}
     ${w.worktree ? `<span class="pill">🌿 ${esc(w.worktree)}</span>` : ''}
     <span class="pill" style="cursor:pointer" title="copy session id" onclick="navigator.clipboard?.writeText('${w.id}');toast('📋 session id copied')">🆔 ${w.id.slice(0, 8)}</span>
     <div class="tabs">${TABS.map(([k, l]) => `<button class="${ui.tab === k ? 'on' : ''}" onclick="ui.tab='${k}';saveUi();renderPanel()">${l}</button>`).join('')}</div>
     ${body}`;
-  p.scrollTop = keep;
+  p.dataset.chat = ui.tab === 'conversation' ? w.id : '';
+  p.scrollTop = stickChat ? p.scrollHeight : keep;
 }
 
 function toast(msg) {
@@ -726,6 +839,25 @@ function toast(msg) {
 }
 
 // ───────────────────────── data ─────────────────────────
+let discountData = [];
+async function fetchDiscounts() {
+  try { const r = await fetch('/api/discounts', { cache: 'no-store' }); discountData = await r.json(); }
+  catch { discountData = []; }
+  const el = document.getElementById('sDiscount');
+  const active = discountData.find(d => d.active);
+  if (active) {
+    const end = new Date(active.endsAt);
+    el.textContent = '🌙 Night discount on until ' + end.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    el.className = 'night-chip active'; el.style.display = '';
+  } else if (discountData.length) {
+    const next = discountData.reduce((a, b) => { const ta = a.startsAt ? new Date(a.startsAt).getTime() : Infinity; const tb = b.startsAt ? new Date(b.startsAt).getTime() : Infinity; return ta < tb ? a : b; });
+    if (next.startsAt) {
+      const start = new Date(next.startsAt);
+      el.textContent = 'Next night discount ' + start.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+      el.className = 'night-chip'; el.style.display = '';
+    }
+  } else { el.style.display = 'none'; }
+}
 async function poll() {
   if (paused) return;
   try {
@@ -733,6 +865,7 @@ async function poll() {
     const r = await fetch(`/api/workers?hours=${hours}`, { cache: 'no-store' });
     const j = await r.json(); if (j.error) throw new Error(j.error);
     const first = !data.loaded; data = j; data.loaded = true; data.first = first;
+    fetchDiscounts();
     skew = j.now - Date.now();
     if (first && wantWorker) selected = data.workers.find((w) => w.id.startsWith(wantWorker))?.id ?? null;
     syncEntities();

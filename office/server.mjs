@@ -28,6 +28,18 @@ const OPENCODE_CONFIG_PATH = ['opencode.json', 'opencode.jsonc']
     .map((f) => join(homedir(), '.config', 'opencode', f))
     .find((f) => existsSync(f)) ?? join(homedir(), '.config', 'opencode', 'opencode.json');
 
+let openCodeProviderNames = {};
+try {
+    const ocConfig = JSON.parse(readFileSync(OPENCODE_CONFIG_PATH, 'utf8'));
+    if (ocConfig.provider) {
+        for (const [id, p] of Object.entries(ocConfig.provider)) {
+            openCodeProviderNames[id] = p.name || id;
+        }
+    }
+} catch {}
+
+const DISCOUNT_CONFIG_PATH = join(homedir(), '.orchestrator', 'config.json');
+
 function getDaemonPort() {
     try {
         if (existsSync(DAEMON_PID_PATH)) {
@@ -156,7 +168,7 @@ function touchedPath(name, input) {
     return path ? String(path).replace(homedir(), '~') : null;
 }
 
-function worker(h, oc, s, now) {
+function worker(h, oc, s, now, detail = false) {
     const turns = h.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id').all(s.id);
     const lastTurn = turns[turns.length - 1];
     const running = !!lastTurn && lastTurn.ended_at == null && !s.closed_at;
@@ -279,11 +291,53 @@ function worker(h, oc, s, now) {
     const lastText = [...feed].reverse().find((f) => f.kind === 'say')?.detail ?? '';
     const text = events.filter((e) => e.ev.t === 'text.delta').map((e) => e.ev.text).join('');
 
+    // conversation: last 30 turns as chat bubbles (prompt / reply)
+    let conversation = null;
+    if (detail) {
+        const last30 = turns.slice(-30);
+        let runningText = '';
+        let runningThinking = '';
+        if (running) {
+            runningText = events.filter((e) => e.ev.t === 'text.delta' && e.at >= lastTurn.started_at)
+                .map((e) => e.ev.text).join('');
+            runningThinking = events.filter((e) => e.ev.t === 'thinking.delta' && e.at >= lastTurn.started_at)
+                .map((e) => e.ev.text).join('');
+        }
+        conversation = last30.map((t, i) => {
+            const isRunning = running && t.id === lastTurn.id;
+            let prompt = String(t.prompt || '');
+            if (prompt.length > 8000) prompt = prompt.slice(0, 8000) + '…(cut)';
+            let reply = isRunning ? runningText : String(t.result_text || '');
+            if (reply.length > 15000) reply = reply.slice(-15000);
+            let usage = { ...ZERO(), ...parse(t.usage) };
+            if (useOc) {
+                try {
+                    const u = opencodeUsage(oc, s.native, t.started_at, t.ended_at ?? Number.MAX_SAFE_INTEGER);
+                    if (u.steps > 0) usage = u.usage;
+                } catch { /* fall back */ }
+            }
+            const entry = {
+                n: turns.length - last30.length + i + 1,
+                startedAt: t.started_at,
+                endedAt: t.ended_at,
+                prompt,
+                reply,
+                aborted: !!t.aborted,
+                usage,
+            };
+            if (isRunning && runningThinking)
+                entry.thinking = runningThinking.length > 4000 ? runningThinking.slice(-4000) : runningThinking;
+            return entry;
+        });
+    }
+
     return {
         id: s.id,
         label: s.label || s.id.slice(0, 8),
         tool: s.tool,
         model: s.model,
+        provider: providerInfo(s.tool, s.model).provider,
+        providerName: providerInfo(s.tool, s.model).providerName,
         cwd: s.cwd.replace(homedir(), '~'),
         createdAt: s.created_at,
         closedAt: s.closed_at,
@@ -298,6 +352,7 @@ function worker(h, oc, s, now) {
         lastPrompt: (lastTurn?.prompt ?? '').slice(0, 1500),
         reply: (lastTurn?.result_text || text).slice(-3000),
         feed: feed.slice(-60),
+        conversation,
         worktree: s.worktree_branch,
     };
 }
@@ -312,7 +367,18 @@ function workers(hours) {
         const sessions = h.prepare(
             `SELECT * FROM sessions WHERE closed_at IS NULL OR updated_at > ? OR created_at > ?
              ORDER BY created_at DESC LIMIT 60`).all(since, since);
-        return sessions.map((s) => worker(h, oc, s, now));
+        const discounts = getDiscounts();
+        const ws = sessions.map((s) => worker(h, oc, s, now));
+        for (const w of ws) {
+            for (const d of discounts) {
+                if (String(w.model).includes(d.match)) {
+                    w.discount = discountStatus(d, now);
+                    break;
+                }
+            }
+            if (!w.discount) w.discount = null;
+        }
+        return ws;
     } finally {
         h.close();
         oc?.close();
@@ -334,6 +400,62 @@ function sessionLimits() {
         maxTurnSteps: num(cfg.maxTurnSteps ?? process.env.ORCH_MAX_TURN_STEPS, 250),
         overrides: Array.isArray(cfg.overrides) ? cfg.overrides : [],
     };
+}
+
+function providerInfo(tool, model) {
+    const toolkit = ['agy', 'claude'].includes(tool) ? tool : null;
+    const provider = toolkit || (String(model).includes('/') ? String(model).split('/')[0] : tool);
+    const providerName = openCodeProviderNames[provider] || provider;
+    return { provider, providerName };
+}
+
+function getDiscounts() {
+    try {
+        const cfg = JSON.parse(readFileSync(DISCOUNT_CONFIG_PATH, 'utf8'));
+        return cfg.discounts || [];
+    } catch { return []; }
+}
+
+function discountStatus(discount, now) {
+    const [fromH, fromM] = discount.from.split(':').map(Number);
+    const [toH, toM] = discount.to.split(':').map(Number);
+    const tz = discount.tz;
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+    const dp = {};
+    fmt.formatToParts(new Date(now)).forEach(p => { if (p.type !== 'literal') dp[p.type] = Number(p.value); });
+    const nowMinutes = dp.hour * 60 + dp.minute;
+    const fromMinutes = fromH * 60 + fromM;
+    const toMinutes = toH * 60 + toM;
+    const makeIso = (h, m, addDays = 0) => {
+        const dateStr = `${dp.year}-${String(dp.month).padStart(2, '0')}-${String(dp.day).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+        const probe = new Date(dateStr);
+        const offsetFmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' });
+        const tzName = offsetFmt.formatToParts(probe).find(p => p.type === 'timeZoneName')?.value || 'GMT';
+        const match = tzName.match(/GMT([+-])(\d+):(\d+)/);
+        const offsetMin = match ? (match[1] === '+' ? 1 : -1) * (Number(match[2]) * 60 + Number(match[3])) : 0;
+        const ms = Date.UTC(dp.year, dp.month - 1, dp.day + addDays, h, m, 0) - offsetMin * 60000;
+        return new Date(ms).toISOString();
+    };
+    let startsAt = null, endsAt = null, active = false;
+    if (fromMinutes <= toMinutes) {
+        active = nowMinutes >= fromMinutes && nowMinutes < toMinutes;
+        if (active) {
+            endsAt = makeIso(toH, toM);
+        } else {
+            startsAt = nowMinutes >= toMinutes ? makeIso(fromH, fromM, 1) : makeIso(fromH, fromM);
+        }
+    } else {
+        active = nowMinutes >= fromMinutes || nowMinutes < toMinutes;
+        if (active) {
+            endsAt = makeIso(toH, toM, nowMinutes >= fromMinutes ? 1 : 0);
+        } else {
+            startsAt = makeIso(fromH, fromM);
+        }
+    }
+    return { label: discount.label, active, startsAt, endsAt, from: discount.from, to: discount.to };
 }
 
 // The orchestra endpoints start and stop agents and can write the opencode config, so only this
@@ -358,6 +480,42 @@ createServer(async (req, res) => {
             const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, limits: sessionLimits(), workers: workers(hours) });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             return res.end(body);
+        }
+        if (url.pathname === '/api/worker') {
+            const id = url.searchParams.get('id');
+            if (!id) {
+                res.writeHead(400, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'missing id' }));
+            }
+            const h = open(DB_PATH);
+            if (!h) {
+                res.writeHead(500, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'db unavailable' }));
+            }
+            const oc = open(OPENCODE_DB);
+            try {
+                const now = Date.now();
+                const row = h.prepare('SELECT * FROM sessions WHERE id LIKE ? LIMIT 1').get(id + '%');
+                if (!row) {
+                    res.writeHead(404, { 'content-type': 'application/json' });
+                    return res.end(JSON.stringify({ error: 'not found' }));
+                }
+                const w = worker(h, oc, row, now, true);
+                const discounts = getDiscounts();
+                for (const d of discounts) {
+                    if (String(w.model).includes(d.match)) {
+                        w.discount = discountStatus(d, now);
+                        break;
+                    }
+                }
+                if (!w.discount) w.discount = null;
+                res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+                res.end(JSON.stringify(w));
+            } finally {
+                h.close();
+                if (oc) oc.close();
+            }
+            return;
         }
         if (url.pathname === '/api/orchestra/config') {
             let config = {
@@ -479,6 +637,12 @@ createServer(async (req, res) => {
             }
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true, closedCount: live.length }));
+        }
+        if (url.pathname === '/api/discounts') {
+            const now = Date.now();
+            const list = getDiscounts().map(d => discountStatus(d, now));
+            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            return res.end(JSON.stringify(list));
         }
         // Code graph (graphify) for the team's project: the tree view graphify writes with
         // `graphify tree`. Read-only; the project folder comes from team.json.
