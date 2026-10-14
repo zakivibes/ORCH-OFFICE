@@ -135,8 +135,10 @@ test("a normal turn under the limits is untouched", async () => {
 test("workerMcp in config.json disables and adds MCP servers for opencode workers", async () => {
   const { workerMcpConfig } = await import("../src/permissions/translate.js");
   const home = mkdtempSync(join(tmpdir(), "orch-home-"));
-  const prev = process.env.HOME;
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   try {
     assert.equal(workerMcpConfig(), undefined, "no config file: nothing changes");
     const { mkdirSync } = await import("node:fs");
@@ -150,6 +152,8 @@ test("workerMcp in config.json disables and adds MCP servers for opencode worker
       graphify: { enabled: true, type: "local", command: ["graphify-mcp"] },
     });
   } finally {
-    process.env.HOME = prev;
+    process.env.HOME = prevHome;
+    if (prevProfile !== undefined) process.env.USERPROFILE = prevProfile;
+    else delete process.env.USERPROFILE;
   }
 });
