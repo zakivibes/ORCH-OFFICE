@@ -393,20 +393,14 @@ async function main() {
 
       const openTerm = flag("--terminal") || teamConfig.coordinator?.autoOpenTerminal;
       if (openTerm && process.platform === "win32") {
+        const coordModel = teamConfig.coordinator?.model;
+        const cmd = coordModel ? `opencode --model ${coordModel}` : "opencode";
         console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
-        try {
-          const term = spawn("cmd.exe", ["/c", "start", "wt.exe", "-d", cwd, "powershell.exe", "-NoExit", "-Command", "opencode"], {
-            detached: true,
-            stdio: "ignore",
-          });
-          term.unref();
-        } catch {
-          const term = spawn("cmd.exe", ["/c", "start", "powershell.exe", "-NoExit", "-Command", `Set-Location '${cwd}'; opencode`], {
-            detached: true,
-            stdio: "ignore",
-          });
-          term.unref();
-        }
+        const term = spawn("cmd.exe", ["/c", "start", "cmd.exe", "/k", `cd /d "${cwd}" && ${cmd}`], {
+          detached: true,
+          stdio: "ignore",
+        });
+        term.unref();
       }
       return;
     }

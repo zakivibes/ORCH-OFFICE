@@ -368,19 +368,11 @@ createServer(async (req, res) => {
             const coordModel = coordinator.model;
             const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
             if (process.platform === 'win32') {
-                try {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'wt.exe', '-d', cwd, 'powershell.exe', '-NoExit', '-Command', cmd], {
-                        detached: true,
-                        stdio: 'ignore'
-                    });
-                    term.unref();
-                } catch {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit', '-Command', `Set-Location '${cwd}'; ${cmd}`], {
-                        detached: true,
-                        stdio: 'ignore'
-                    });
-                    term.unref();
-                }
+                const term = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `cd /d "${cwd}" && ${cmd}`], {
+                    detached: true,
+                    stdio: 'ignore'
+                });
+                term.unref();
             }
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true }));
@@ -416,19 +408,11 @@ createServer(async (req, res) => {
             if (openTerm && process.platform === 'win32') {
                 const coordModel = body.coordinator?.model;
                 const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
-                try {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'wt.exe', '-d', cwd, 'powershell.exe', '-NoExit', '-Command', cmd], {
-                        detached: true,
-                        stdio: 'ignore'
-                    });
-                    term.unref();
-                } catch {
-                    const term = spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit', '-Command', `Set-Location '${cwd}'; ${cmd}`], {
-                        detached: true,
-                        stdio: 'ignore'
-                    });
-                    term.unref();
-                }
+                const term = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `cd /d "${cwd}" && ${cmd}`], {
+                    detached: true,
+                    stdio: 'ignore'
+                });
+                term.unref();
             }
 
             res.writeHead(200, { 'content-type': 'application/json' });
