@@ -64,6 +64,31 @@ function readBodyJson(req) {
     });
 }
 
+function launchCoordinatorWindow(cwd, coordinator) {
+    if (process.platform !== 'win32') return;
+    const coordModel = coordinator?.model;
+    const cmd = coordModel ? `opencode --model "${coordModel}"` : 'opencode';
+    const batPath = join(homedir(), '.orchestrator', 'run-coordinator.bat');
+    const content = [
+        '@echo off',
+        `cd /d "${cwd}"`,
+        'title ORCH Coordinator - OpenCode',
+        'echo ====================================================',
+        'echo        ORCH OFFICE - Bas Koordinator CLI',
+        'echo ====================================================',
+        'echo.',
+        cmd,
+        'cmd /k'
+    ].join('\r\n');
+    writeFileSync(batPath, content, 'utf8');
+
+    const term = spawn('cmd.exe', ['/c', 'start', '""', batPath], {
+        detached: true,
+        stdio: 'ignore'
+    });
+    term.unref();
+}
+
 const parse = (s, d = {}) => { try { return JSON.parse(s); } catch { return d; } };
 const ZERO = () => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0 });
 const add = (a, b) => {
@@ -365,16 +390,7 @@ createServer(async (req, res) => {
             const body = await readBodyJson(req);
             const cwd = body.cwd || "D:\\OffHours";
             const coordinator = body.coordinator || {};
-            const coordModel = coordinator.model;
-            const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
-            if (process.platform === 'win32') {
-                const term = spawn('cmd.exe', ['/c', 'start', 'Coordinator', 'cmd.exe', '/k', cmd], {
-                    cwd,
-                    detached: true,
-                    stdio: 'ignore'
-                });
-                term.unref();
-            }
+            launchCoordinatorWindow(cwd, coordinator);
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true }));
         }
@@ -407,14 +423,7 @@ createServer(async (req, res) => {
 
             const openTerm = body.coordinator?.autoOpenTerminal !== false;
             if (openTerm && process.platform === 'win32') {
-                const coordModel = body.coordinator?.model;
-                const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
-                const term = spawn('cmd.exe', ['/c', 'start', 'Coordinator', 'cmd.exe', '/k', cmd], {
-                    cwd,
-                    detached: true,
-                    stdio: 'ignore'
-                });
-                term.unref();
+                launchCoordinatorWindow(cwd, body.coordinator);
             }
 
             res.writeHead(200, { 'content-type': 'application/json' });

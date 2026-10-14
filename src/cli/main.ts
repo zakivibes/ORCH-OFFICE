@@ -5,7 +5,7 @@ process.on("warning", (w) => {
   if (w.name !== "ExperimentalWarning") console.warn(w);
 });
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -394,10 +394,22 @@ async function main() {
       const openTerm = flag("--terminal") || teamConfig.coordinator?.autoOpenTerminal;
       if (openTerm && process.platform === "win32") {
         const coordModel = teamConfig.coordinator?.model;
-        const cmd = coordModel ? `opencode --model ${coordModel}` : "opencode";
+        const cmd = coordModel ? `opencode --model "${coordModel}"` : "opencode";
         console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
-        const term = spawn("cmd.exe", ["/c", "start", "Coordinator", "cmd.exe", "/k", cmd], {
-          cwd,
+        const batPath = join(homedir(), ".orchestrator", "run-coordinator.bat");
+        const content = [
+          "@echo off",
+          `cd /d "${cwd}"`,
+          "title ORCH Coordinator - OpenCode",
+          "echo ====================================================",
+          "echo        ORCH OFFICE - Bas Koordinator CLI",
+          "echo ====================================================",
+          "echo.",
+          cmd,
+          "cmd /k",
+        ].join("\r\n");
+        writeFileSync(batPath, content, "utf8");
+        const term = spawn("cmd.exe", ["/c", "start", '""', batPath], {
           detached: true,
           stdio: "ignore",
         });
