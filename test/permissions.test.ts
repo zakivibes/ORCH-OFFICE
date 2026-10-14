@@ -137,6 +137,7 @@ test("opencode translation emits a catch-all first and confines external dirs", 
   assert.equal(permission.read["*.env"], "deny");
   assert.equal(permission.external_directory["*"], "deny");
   assert.equal(permission.external_directory[`${dir}/**`], "allow");
+  assert.equal(permission.question, "deny", "nobody can answer the question tool mid-turn");
 });
 
 test("agy mode follows the resolved Claude Code defaultMode", () => {

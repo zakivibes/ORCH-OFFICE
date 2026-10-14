@@ -141,6 +141,10 @@ export function toOpencodePermission(policy: Policy): Record<string, unknown> {
     webfetch: "ask",
     websearch: "ask",
     external_directory: { "*": "deny" },
+    // opencode's question tool waits for a human to pick an option, and nobody can answer it
+    // mid-turn through orch, so the worker would sit there until its turn timed out. Denied, the
+    // model gets an error back and carries on with its own best choice.
+    question: "deny",
   };
   const full = workerShellEnabled(policy);
   if (full) {
