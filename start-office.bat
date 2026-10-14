@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 title ORCH OFFICE
 echo ====================================================
 echo             ORCH OFFICE - Windows Baslatici

@@ -757,8 +757,25 @@ async function openOrchModal() {
     const cfg = await res.json();
     document.getElementById('inputCwd').value = cfg.cwd || 'D:\\OffHours';
     document.getElementById('coordTool').value = cfg.coordinator?.tool || 'opencode';
-    document.getElementById('coordModel').value = cfg.coordinator?.model || 'opencode/space-bunny-free';
+    document.getElementById('coordModel').value = cfg.coordinator?.model || (cfg.coordinator?.tool === 'claude' ? 'sonnet' : 'opencode/space-bunny-free');
     document.getElementById('coordAutoTerm').checked = cfg.coordinator?.autoOpenTerminal !== false;
+
+    const updateCoordPlaceholder = () => {
+      const tool = document.getElementById('coordTool').value;
+      const mInput = document.getElementById('coordModel');
+      if (tool === 'claude') {
+        mInput.placeholder = 'sonnet (veya opus, boş bırakabilirsiniz)';
+        if (!mInput.value || mInput.value.includes('opencode/')) mInput.value = 'sonnet';
+      } else if (tool === 'agy') {
+        mInput.placeholder = 'Model (varsayılan: inherit)';
+        if (mInput.value.includes('opencode/')) mInput.value = '';
+      } else {
+        mInput.placeholder = 'opencode/space-bunny-free';
+        if (!mInput.value || mInput.value === 'sonnet') mInput.value = 'opencode/space-bunny-free';
+      }
+    };
+    document.getElementById('coordTool').onchange = updateCoordPlaceholder;
+    updateCoordPlaceholder();
 
     const container = document.getElementById('workersContainer');
     container.innerHTML = '';
