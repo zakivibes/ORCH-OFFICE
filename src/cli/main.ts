@@ -5,12 +5,19 @@ process.on("warning", (w) => {
   if (w.name !== "ExperimentalWarning") console.warn(w);
 });
 
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 import { startDaemon } from "../core/daemon.js";
 import { DaemonClient } from "../core/client.js";
 import type { Event } from "../core/types.js";
 
 const help = `orch — persistent multi-agent orchestrator for claude, agy and opencode
 
+  orch up [--cwd DIR] [--terminal] [--force]
+                                  start all workers defined in team.json
+  orch down                       terminate all live sessions
   orch daemon [--foreground]     run the session daemon
   orch open <tool> <prompt>      start a session and send the first turn
   orch diff <sessionId> [--stat]  show what the agent changed (needs --worktree)
@@ -121,9 +128,17 @@ async function main() {
 
     case "doctor": {
       const { execFileSync } = await import("node:child_process");
+      const { resolveBinary } = await import("../core/bin.js");
       for (const bin of ["claude", "agy", "opencode"]) {
         try {
-          console.log(`✓ ${bin.padEnd(9)} ${execFileSync(bin, ["--version"], { encoding: "utf8" }).trim()}`);
+          const resolved = resolveBinary(bin);
+          const isBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
+          console.log(
+            `✓ ${bin.padEnd(9)} ${execFileSync(resolved, ["--version"], {
+              encoding: "utf8",
+              shell: isBatch,
+            }).trim()}`,
+          );
         } catch {
           console.log(`✗ ${bin.padEnd(9)} not found on PATH`);
         }
@@ -308,6 +323,93 @@ async function main() {
       await call("/close", { sessionId: pos[0] });
       console.log("closed");
       return;
+
+    case "down": {
+      const { sessions } = await call("/list", { includeClosed: false });
+      const live = (sessions as any[]).filter((s) => !s.closedAt);
+      if (!live.length) {
+        console.log("No live sessions.");
+        return;
+      }
+      console.log(`Shutting down ${live.length} live session(s)...`);
+      for (const s of live) {
+        await call("/close", { sessionId: s.id });
+        console.log(`  ✗ ${(s.label || s.id.slice(0, 8)).padEnd(18)} closed`);
+      }
+      console.log("All sessions terminated.");
+      return;
+    }
+
+    case "up": {
+      const teamPath = join(homedir(), ".orchestrator", "team.json");
+      if (!existsSync(teamPath)) {
+        console.error(`team config not found at ${teamPath}`);
+        process.exit(1);
+      }
+      let teamConfig: any;
+      try {
+        teamConfig = JSON.parse(readFileSync(teamPath, "utf8"));
+      } catch (e) {
+        console.error(`failed to parse ${teamPath}: ${e}`);
+        process.exit(1);
+      }
+
+      const cwd = arg("--cwd") ?? teamConfig.cwd ?? process.cwd();
+      const { sessions } = await call("/list", { includeClosed: false });
+      const live = (sessions as any[]).filter((s) => !s.closedAt);
+
+      if (live.length > 0) {
+        if (!flag("--force")) {
+          console.error(`There are already ${live.length} live session(s). Use --force to close them and relaunch.`);
+          process.exit(1);
+        }
+        console.log(`Closing ${live.length} existing live session(s)...`);
+        for (const s of live) {
+          await call("/close", { sessionId: s.id });
+        }
+      }
+
+      const workers = teamConfig.workers || [];
+      console.log(`\n🏢 Launching orchestra (${workers.length} workers, cwd: ${cwd})...\n`);
+
+      for (const w of workers) {
+        process.stdout.write(`  ⏳ Starting ${w.label || w.tool}... `);
+        try {
+          const r = await call("/open", {
+            tool: w.tool,
+            cwd,
+            roots: [cwd],
+            label: w.label,
+            model: w.model || undefined,
+            prompt: w.prompt || "Hazır ol ve bekle.",
+          });
+          console.log(`✓ [${r.session.id.slice(0, 8)}] ${(w.model || w.tool)}`);
+        } catch (err: any) {
+          console.log(`✗ failed: ${err.message || err}`);
+        }
+      }
+
+      console.log(`\n🟢 Orchestra is ON SHIFT! Office: http://localhost:4747\n`);
+
+      const openTerm = flag("--terminal") || teamConfig.coordinator?.autoOpenTerminal;
+      if (openTerm && process.platform === "win32") {
+        console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
+        try {
+          const term = spawn("cmd.exe", ["/c", "start", "wt.exe", "-d", cwd, "opencode"], {
+            detached: true,
+            stdio: "ignore",
+          });
+          term.unref();
+        } catch {
+          const term = spawn("cmd.exe", ["/c", "start", "cmd.exe", "/k", `cd /d "${cwd}" && opencode`], {
+            detached: true,
+            stdio: "ignore",
+          });
+          term.unref();
+        }
+      }
+      return;
+    }
 
     default:
       console.error(`unknown command: ${cmd}\n\n${help}`);

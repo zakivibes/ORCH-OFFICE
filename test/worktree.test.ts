@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeManager } from "../src/core/worktree.js";
 
+process.env.GIT_CEILING_DIRECTORIES = tmpdir();
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
 }
@@ -15,6 +17,7 @@ function repo(): string {
   git(dir, "init", "-q");
   git(dir, "config", "user.email", "t@t");
   git(dir, "config", "user.name", "t");
+  git(dir, "config", "core.autocrlf", "false");
   writeFileSync(join(dir, "file.txt"), "original\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "init");

@@ -7,6 +7,7 @@ import { toAgyFlags } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { readJsonLines, drain } from "./ndjson.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
+import { resolveBinary } from "../core/bin.js";
 import {
   zeroUsage,
   addUsage,
@@ -55,7 +56,7 @@ export class AgyAdapter implements Adapter {
 
   constructor(
     private readonly policy: Policy,
-    private readonly binary = "agy",
+    private readonly binary = resolveBinary("agy"),
   ) {}
 
   async spawn(opts: SpawnOptions): Promise<Handle> {
@@ -312,6 +313,7 @@ export class AgyAdapter implements Adapter {
     return this.live.get(id)?.child.pid ?? null;
   }
 }
+
 /**
  * The most recent error agy logged, for turns that fail with an empty response.
  * Prefers the process's own stderr; falls back to the newest agy CLI log file.

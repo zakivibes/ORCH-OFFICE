@@ -81,7 +81,7 @@
   .live .clock { font: 700 24px ui-monospace, Menlo, monospace; color: #3ddc84; }
   .kv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 6px; font-size: 12px; color: var(--dim); }
   .kv b { display: block; color: var(--ink); font-size: 15px; }
-  .feed .say b { color: #c9b6ff; } .feed .think b { color: #ffb86b; } .feed .think { color: #b9b6d8; font-style: italic; } .feed .say { color: #cfcde8; }
+  .feed .say b { color: #c9b6ff; } .feed .say { color: #cfcde8; }
   .files div { font: 12.5px ui-monospace, Menlo, monospace; padding: 3px 0; border-bottom: 1px dashed #2a2a44; word-break: break-all; }
   svg.spark { vertical-align: middle; }
 </style>
@@ -91,6 +91,8 @@
   <header>
     <h1>ORCH OFFICE</h1>
     <nav class="views"><button data-view="office">🏢 Office</button><button data-view="dash">📊 Dashboard</button></nav>
+    <button id="btnOpenModal" onclick="openOrchModal()" style="background:#1d3b24;border-color:#3ddc84;color:#3ddc84;font-weight:700;">🚀 Orkestra Yönetimi</button>
+    <button id="btnStopAll" onclick="stopOrchestra()" style="background:#3b1d24;border-color:#ff4d6d;color:#ff4d6d;font-weight:700;" title="Tüm canlı çalışanları kapat">🛑 Durdur</button>
     <span class="stat">On shift<b id="sOnline">0</b></span>
     <span class="stat">Working<b id="sWorking">0</b></span>
     <span class="stat" title="working, but no event for a while">Quiet<b id="sStalled">0</b></span>
@@ -110,6 +112,58 @@
   </header>
   <div id="stage"><canvas id="c"></canvas><div id="dash" hidden></div><div id="toasts"></div></div>
   <aside id="panel"></aside>
+</div>
+
+<!-- Modal: Orkestra Kur & Başlat -->
+<div id="orchModal" style="display:none; position:fixed; inset:0; background:rgba(5,5,10,0.85); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+  <div style="background:#181828; border:3px solid var(--line); border-radius:12px; width:760px; max-width:95vw; max-height:90vh; overflow-y:auto; padding:22px; display:flex; flex-direction:column; gap:16px; box-shadow:0 12px 48px rgba(0,0,0,0.9);">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid var(--line); padding-bottom:12px;">
+      <h2 style="margin:0; font-family:'Press Start 2P', monospace; font-size:14px; color:var(--gold);">🚀 ORKESTRA KURULUMU</h2>
+      <button onclick="closeOrchModal()" style="padding:4px 10px; font-weight:700;">✕</button>
+    </div>
+
+    <!-- CWD -->
+    <div>
+      <label style="display:block; font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase; margin-bottom:6px;">📂 Çalışma Dizini (CWD):</label>
+      <input id="inputCwd" type="text" style="width:100%; font-family:ui-monospace,Menlo,monospace; padding:8px 10px; background:#0e0e18; border:2px solid var(--line); border-radius:6px; color:var(--ink); font-size:14px;" placeholder="D:\OffHours" />
+      <span style="font-size:11.5px; color:var(--dim);">Tüm çalışanlar ve koordinatör bu klasörde görev yapacaktır.</span>
+    </div>
+
+    <!-- Coordinator -->
+    <div style="background:#111120; border:2px solid var(--line); border-radius:8px; padding:12px;">
+      <div style="font-size:12px; font-weight:700; color:var(--gold); text-transform:uppercase; margin-bottom:8px;">👑 Baş Koordinatör (Mimari / Planlama):</div>
+      <div style="display:grid; grid-template-columns:120px 1fr; gap:10px; align-items:center;">
+        <select id="coordTool" style="padding:7px; background:#1b1b2f; border:2px solid var(--line); border-radius:6px; color:var(--ink);">
+          <option value="opencode">OpenCode</option>
+          <option value="agy">AGY</option>
+          <option value="claude">Claude</option>
+        </select>
+        <input id="coordModel" type="text" style="padding:7px 10px; background:#0e0e18; border:2px solid var(--line); border-radius:6px; color:var(--ink); font-family:ui-monospace,monospace; font-size:13px;" placeholder="opencode/space-bunny-free" value="opencode/space-bunny-free" />
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:13px; color:var(--ink); cursor:pointer;">
+        <input id="coordAutoTerm" type="checkbox" checked style="accent-color:var(--gold); width:16px; height:16px;" />
+        <span>Orkestra başladığında Koordinatör Terminalini otomatik aç (Windows Terminal / CMD)</span>
+      </label>
+    </div>
+
+    <!-- Workers Pool -->
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span style="font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase;">👥 Çalışan Kadrosu (Workers Pool):</span>
+        <button onclick="addWorkerRow()" style="background:#24243c; border-color:var(--line); padding:5px 10px; font-size:12px; color:#3ddc84; font-weight:600;">➕ Çalışan Ekle</button>
+      </div>
+      <div id="workersContainer" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; padding-right:4px;"></div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div style="display:flex; justify-content:space-between; align-items:center; border-top:2px solid var(--line); padding-top:14px;">
+      <button onclick="saveOrchConfig()" style="background:#24243e; padding:8px 16px;">💾 Şablonu Kaydet</button>
+      <div style="display:flex; gap:10px;">
+        <button onclick="closeOrchModal()" style="background:#1b1b2a; padding:8px 14px;">İptal</button>
+        <button id="btnLaunchOrch" onclick="launchOrchestra()" style="background:#2d4a22; border-color:#3ddc84; color:#3ddc84; font-weight:700; font-size:14px; padding:8px 20px;">🚀 Orkestrayı Başlat</button>
+      </div>
+    </div>
+  </div>
 </div>
 <script>
 // ───────────────────────── setup ─────────────────────────
@@ -300,14 +354,7 @@ function drawDesk(e, i) {
 
 function bubble(w, cx, cy, phase) {
   let t = '', col = '#eceaff';
-  if (w.state === 'working') {
-    // Show whatever the worker did last: a tool call, or (for workers whose tool calls are not
-    // streamed) its latest words. Only fall back to "thinking" when there is neither.
-    const f = w.feed.filter((e) => e.kind === 'tool' || e.kind === 'say').pop();
-    t = !f ? '💭 thinking' : f.kind === 'tool' ? `${TOOL_ICON[f.name] || '⚙️'} ${f.name}`
-      : `💬 ${f.detail.length > 26 ? f.detail.slice(0, 25) + '…' : f.detail}`;
-    if (w.stalled) { t = `⚠️ quiet ${ago(w.lastAt).replace(' ago', '')}`; col = '#ffd166'; }
-  }
+  if (w.state === 'working') { const f = w.feed.filter((e) => e.kind === 'tool').pop(); t = f ? `${TOOL_ICON[f.name] || '⚙️'} ${f.name}` : '💭 thinking'; }
   else if (w.state === 'idle') { t = '💤' + ' z'.repeat(1 + ((phase >> 4) % 3)); col = '#a19ec8'; }
   else if (w.state === 'error') { t = '❗ error'; col = '#ff4d6d'; }
   else return;
@@ -557,7 +604,7 @@ function usageBlock(w) {
   const rows = [['Fresh input', n(t.inputTokens)], ['Cached input', cached(t)], ['Output', n(t.outputTokens)], ['Thinking', n(t.thinkingTokens)]];
   return `<div class="utot"><b>${fmtTok(processed(t))}</b> processed · <b>${fmtTok(generated(t))}</b> generated${w.costUsd ? ` · $${w.costUsd.toFixed(4)}` : ''}</div>
     ${rows.map(([k, v]) => `<div class="urow"><span>${k}</span><i style="width:${(v / Math.max(1, ...rows.map((r) => r[1]))) * 100}%"></i><b title="${v.toLocaleString()}">${fmtTok(v)}</b></div>`).join('')}
-    <div class="hint" style="margin-top:4px">Source: ${w.usageSource === 'opencode' ? SRC.opencode : w.usageSource === 'agy-transcript' ? "live from agy's own step transcript (every step, updates mid-turn)" : SRC[w.tool] || SRC.claude}</div>`;
+    <div class="hint" style="margin-top:4px">Source: ${w.usageSource === 'opencode' ? SRC.opencode : SRC[w.tool] || SRC.claude}</div>`;
 }
 
 function liveBlock(w) {
@@ -601,10 +648,10 @@ function renderPanel() {
       <div class="hint" style="margin-top:10px">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
       ${w.state !== 'gone' ? `<div class="btns"><button onclick="cheer('${w.id}','praise')">👏 Praise</button><button onclick="cheer('${w.id}','coffee')">☕ Buy coffee</button></div>` : ''}`;
   } else if (ui.tab === 'activity') {
-    const kinds = { all: null, tool: ['tool'], say: ['say'], think: ['think'], issues: ['error', 'perm'] };
+    const kinds = { all: null, tool: ['tool'], say: ['say'], issues: ['error', 'perm'] };
     const f = kinds[ui.feed] ? w.feed.filter((e) => kinds[ui.feed].includes(e.kind)) : w.feed;
     body = `<div class="chips">${Object.keys(kinds).map((k) => `<button class="${ui.feed === k ? 'on' : ''}" onclick="ui.feed='${k}';saveUi();renderPanel()">${k}</button>`).join('')}</div>
-      <div class="feed">${f.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : e.kind === 'say' ? '💬 ' : e.kind === 'think' ? '🧠 ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>`;
+      <div class="feed">${f.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : e.kind === 'say' ? '💬 ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>`;
   } else if (ui.tab === 'turns') {
     body = `<table class="grid"><thead><tr><th>#</th><th>Started</th><th>Duration</th><th>Steps</th><th>Processed</th><th>Gen.</th><th class="l">Status</th></tr></thead><tbody>
       ${w.turnRows.slice().reverse().map((t) => `<tr title="${esc(t.prompt)}"><td>${t.n}</td><td>${ago(t.startedAt)}</td>
@@ -664,12 +711,124 @@ async function poll() {
   } catch (e) { console.error('[office]', e); document.getElementById('sConn').title = String(e); }
 }
 
-// Clocks tick every second without refetching.
-setInterval(() => {
-  for (const el of document.querySelectorAll('[data-since]')) el.textContent = dur(nowS() - Number(el.dataset.since));
-  const ok = paused || Date.now() - lastOk < 10000, c = document.getElementById('sConn');
-  c.textContent = paused ? '❚❚ PAUSED' : ok ? '● LIVE' : '● OFFLINE'; c.style.color = paused ? 'var(--warn)' : ok ? '#3ddc84' : '#ff4d6d';
-}, 1000);
+// ───────────────────────── orchestra launcher ─────────────────────────
+function addWorkerRow(w = {}) {
+  const container = document.getElementById('workersContainer');
+  const div = document.createElement('div');
+  div.className = 'worker-row';
+  div.style.cssText = 'display:grid; grid-template-columns:140px 100px 1fr 34px; gap:8px; align-items:center; background:#111120; border:1px solid var(--line); border-radius:6px; padding:8px;';
+  div.innerHTML = `
+    <input type="text" class="w-label" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-size:12.5px;" placeholder="Etiket (NIM-1)" value="${w.label || ''}" />
+    <select class="w-tool" style="padding:6px 4px; background:#1b1b2f; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-size:12.5px;">
+      <option value="opencode" ${w.tool === 'opencode' ? 'selected' : ''}>opencode</option>
+      <option value="agy" ${w.tool === 'agy' ? 'selected' : ''}>agy</option>
+      <option value="claude" ${w.tool === 'claude' ? 'selected' : ''}>claude</option>
+    </select>
+    <input type="text" class="w-model" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-family:ui-monospace,monospace; font-size:12px;" placeholder="Model (nim-1/z-ai/glm-5.3-flash)" value="${w.model || ''}" />
+    <button onclick="this.parentElement.remove()" style="background:#3a1820; border:1px solid #ff4d6d; color:#ff4d6d; padding:4px 8px; border-radius:4px; cursor:pointer;" title="Kaldır">✕</button>
+  `;
+  container.appendChild(div);
+}
+
+async function openOrchModal() {
+  document.getElementById('orchModal').style.display = 'flex';
+  try {
+    const res = await fetch('/api/orchestra/config');
+    const cfg = await res.json();
+    document.getElementById('inputCwd').value = cfg.cwd || 'D:\\OffHours';
+    document.getElementById('coordTool').value = cfg.coordinator?.tool || 'opencode';
+    document.getElementById('coordModel').value = cfg.coordinator?.model || 'opencode/space-bunny-free';
+    document.getElementById('coordAutoTerm').checked = cfg.coordinator?.autoOpenTerminal !== false;
+
+    const container = document.getElementById('workersContainer');
+    container.innerHTML = '';
+    (cfg.workers || []).forEach((w) => addWorkerRow(w));
+  } catch (e) {
+    toast('Konfigürasyon yüklenemedi: ' + e.message);
+  }
+}
+
+function closeOrchModal() {
+  document.getElementById('orchModal').style.display = 'none';
+}
+
+function collectOrchForm() {
+  const cwd = document.getElementById('inputCwd').value.trim() || 'D:\\OffHours';
+  const coordinator = {
+    tool: document.getElementById('coordTool').value,
+    model: document.getElementById('coordModel').value.trim(),
+    autoOpenTerminal: document.getElementById('coordAutoTerm').checked,
+  };
+  const workers = [];
+  document.querySelectorAll('#workersContainer .worker-row').forEach((row) => {
+    const label = row.querySelector('.w-label').value.trim();
+    const tool = row.querySelector('.w-tool').value;
+    const model = row.querySelector('.w-model').value.trim();
+    if (label || model) {
+      workers.push({ label: label || model || tool, tool, model, prompt: 'Hazır ol ve bekle.' });
+    }
+  });
+  return { cwd, coordinator, workers };
+}
+
+async function saveOrchConfig() {
+  const payload = collectOrchForm();
+  try {
+    const r = await fetch('/api/orchestra/save', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.ok) toast('Kadro şablonu başarıyla kaydedildi! 💾');
+    else throw new Error(j.error || 'Bilinmeyen hata');
+  } catch (e) {
+    toast('Hata: ' + e.message);
+  }
+}
+
+async function launchOrchestra() {
+  const payload = collectOrchForm();
+  const btn = document.getElementById('btnLaunchOrch');
+  btn.disabled = true;
+  btn.textContent = '⏳ Başlatılıyor...';
+  toast('Orkestra kuruluyor, çalışanlar masalarına oturuyor...');
+  try {
+    const r = await fetch('/api/orchestra/launch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      toast('Orkestra başarıyla başlatıldı! 🚀');
+      closeOrchModal();
+      setTimeout(poll, 1000);
+    } else {
+      throw new Error(j.error || 'Başlatılamadı');
+    }
+  } catch (e) {
+    toast('Hata: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 Orkestrayı Başlat';
+  }
+}
+
+async function stopOrchestra() {
+  if (!confirm('Tüm canlı çalışan oturumlarını kapatmak istediğinize emin misiniz?')) return;
+  toast('Oturumlar kapatılıyor...');
+  try {
+    const r = await fetch('/api/orchestra/stop', { method: 'POST' });
+    const j = await r.json();
+    if (j.ok) {
+      toast(`Orkestra durduruldu (${j.closedCount} oturum kapatıldı). 🛑`);
+      setTimeout(poll, 1000);
+    }
+  } catch (e) {
+    toast('Hata: ' + e.message);
+  }
+}
 
 resize(); renderPanel(); frame(); setView(ui.view); poll(); setInterval(poll, 3000);
 </script>

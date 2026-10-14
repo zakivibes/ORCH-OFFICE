@@ -78,16 +78,22 @@ function writeLog(sessionId: string, events: Event[]): string {
   return p;
 }
 
+import { resolveBinary } from "./bin.js";
+
 let modelCache: { at: number; models: string[] } | null = null;
 
 /**
  * Ask opencode which models it can actually reach. Cached briefly because the
  * call shells out and the list changes only when credentials change.
  */
-async function listModels(binary = "opencode"): Promise<string[]> {
+async function listModels(binary = resolveBinary("opencode")): Promise<string[]> {
   if (modelCache && Date.now() - modelCache.at < 300_000) return modelCache.models;
   try {
-    const { stdout } = await execFileAsync(binary, ["models"], { maxBuffer: 8 * 1024 * 1024 });
+    const isBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(binary);
+    const { stdout } = await execFileAsync(binary, ["models"], {
+      shell: isBatch,
+      maxBuffer: 8 * 1024 * 1024,
+    });
     const models = stdout
       .split("\n")
       .map((l) => l.trim())
