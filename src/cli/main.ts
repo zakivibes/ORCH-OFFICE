@@ -381,7 +381,7 @@ async function main() {
             roots: [cwd],
             label: w.label,
             model: w.model || undefined,
-            prompt: w.prompt || "Hazır ol ve bekle.",
+            prompt: w.prompt || "Get ready and wait for a task.",
           });
           console.log(`✓ [${r.session.id.slice(0, 8)}] ${(w.model || w.tool)}`);
         } catch (err: any) {
@@ -412,7 +412,7 @@ async function main() {
           `cd /d "${cwd}"`,
           "title ORCH Coordinator - OpenCode",
           "echo ====================================================",
-          "echo        ORCH OFFICE - Bas Koordinator CLI",
+          "echo        ORCH OFFICE - Lead Coordinator CLI",
           "echo ====================================================",
           "echo.",
           "opencode",

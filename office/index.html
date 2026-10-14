@@ -91,8 +91,8 @@
   <header>
     <h1>ORCH OFFICE</h1>
     <nav class="views"><button data-view="office">🏢 Office</button><button data-view="dash">📊 Dashboard</button></nav>
-    <button id="btnOpenModal" onclick="openOrchModal()" style="background:#1d3b24;border-color:#3ddc84;color:#3ddc84;font-weight:700;">🚀 Orkestra Yönetimi</button>
-    <button id="btnStopAll" onclick="stopOrchestra()" style="background:#3b1d24;border-color:#ff4d6d;color:#ff4d6d;font-weight:700;" title="Tüm canlı çalışanları kapat">🛑 Durdur</button>
+    <button id="btnOpenModal" onclick="openOrchModal()" style="background:#1d3b24;border-color:#3ddc84;color:#3ddc84;font-weight:700;">🚀 Team launcher</button>
+    <button id="btnStopAll" onclick="stopOrchestra()" style="background:#3b1d24;border-color:#ff4d6d;color:#ff4d6d;font-weight:700;" title="Close every live worker">🛑 Stop all</button>
     <span class="stat">On shift<b id="sOnline">0</b></span>
     <span class="stat">Working<b id="sWorking">0</b></span>
     <span class="stat" title="working, but no event for a while">Quiet<b id="sStalled">0</b></span>
@@ -114,24 +114,24 @@
   <aside id="panel"></aside>
 </div>
 
-<!-- Modal: Orkestra Kur & Başlat -->
+<!-- Modal: set up and launch the team -->
 <div id="orchModal" style="display:none; position:fixed; inset:0; background:rgba(5,5,10,0.85); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
   <div style="background:#181828; border:3px solid var(--line); border-radius:12px; width:760px; max-width:95vw; max-height:90vh; overflow-y:auto; padding:22px; display:flex; flex-direction:column; gap:16px; box-shadow:0 12px 48px rgba(0,0,0,0.9);">
     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid var(--line); padding-bottom:12px;">
-      <h2 style="margin:0; font-family:'Press Start 2P', monospace; font-size:14px; color:var(--gold);">🚀 ORKESTRA KURULUMU</h2>
+      <h2 style="margin:0; font-family:'Press Start 2P', monospace; font-size:14px; color:var(--gold);">🚀 TEAM SETUP</h2>
       <button onclick="closeOrchModal()" style="padding:4px 10px; font-weight:700;">✕</button>
     </div>
 
     <!-- CWD -->
     <div>
-      <label style="display:block; font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase; margin-bottom:6px;">📂 Çalışma Dizini (CWD):</label>
+      <label style="display:block; font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase; margin-bottom:6px;">📂 Working folder (cwd):</label>
       <input id="inputCwd" type="text" style="width:100%; font-family:ui-monospace,Menlo,monospace; padding:8px 10px; background:#0e0e18; border:2px solid var(--line); border-radius:6px; color:var(--ink); font-size:14px;" placeholder="project folder (default: your home folder)" />
-      <span style="font-size:11.5px; color:var(--dim);">Tüm çalışanlar ve koordinatör bu klasörde görev yapacaktır.</span>
+      <span style="font-size:11.5px; color:var(--dim);">Every worker and the coordinator work in this folder.</span>
     </div>
 
     <!-- Coordinator -->
     <div style="background:#111120; border:2px solid var(--line); border-radius:8px; padding:12px;">
-      <div style="font-size:12px; font-weight:700; color:var(--gold); text-transform:uppercase; margin-bottom:8px;">👑 Baş Koordinatör (Mimari / Planlama):</div>
+      <div style="font-size:12px; font-weight:700; color:var(--gold); text-transform:uppercase; margin-bottom:8px;">👑 Lead coordinator (architecture / planning):</div>
       <div style="display:grid; grid-template-columns:120px 1fr; gap:10px; align-items:center;">
         <select id="coordTool" style="padding:7px; background:#1b1b2f; border:2px solid var(--line); border-radius:6px; color:var(--ink);">
           <option value="opencode">OpenCode</option>
@@ -142,37 +142,37 @@
       </div>
       <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:13px; color:var(--ink); cursor:pointer;">
         <input id="coordAutoTerm" type="checkbox" checked style="accent-color:var(--gold); width:16px; height:16px;" />
-        <span>Orkestra başladığında Koordinatör Terminalini otomatik aç (Windows Terminal / CMD)</span>
+        <span>Open the coordinator terminal when the team starts (Windows only)</span>
       </label>
     </div>
 
     <!-- Workers Pool -->
     <div>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase;">👥 Çalışan Kadrosu (Workers Pool):</span>
-        <button onclick="addWorkerRow()" style="background:#24243c; border-color:var(--line); padding:5px 10px; font-size:12px; color:#3ddc84; font-weight:600;">➕ Çalışan Ekle</button>
+        <span style="font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase;">👥 Workers:</span>
+        <button onclick="addWorkerRow()" style="background:#24243c; border-color:var(--line); padding:5px 10px; font-size:12px; color:#3ddc84; font-weight:600;">➕ Add worker</button>
       </div>
       <div id="workersContainer" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; padding-right:4px;"></div>
     </div>
 
     <!-- Action Buttons -->
     <div style="display:flex; justify-content:space-between; align-items:center; border-top:2px solid var(--line); padding-top:14px;">
-      <button onclick="saveOrchConfig()" style="background:#24243e; padding:8px 16px;">💾 Şablonu Kaydet</button>
+      <button onclick="saveOrchConfig()" style="background:#24243e; padding:8px 16px;">💾 Save team</button>
       <div style="display:flex; gap:10px;">
-        <button onclick="closeOrchModal()" style="background:#1b1b2a; padding:8px 14px;">İptal</button>
-        <button id="btnLaunchOrch" onclick="launchOrchestra()" style="background:#2d4a22; border-color:#3ddc84; color:#3ddc84; font-weight:700; font-size:14px; padding:8px 20px;">🚀 Orkestrayı Başlat</button>
+        <button onclick="closeOrchModal()" style="background:#1b1b2a; padding:8px 14px;">Cancel</button>
+        <button id="btnLaunchOrch" onclick="launchOrchestra()" style="background:#2d4a22; border-color:#3ddc84; color:#3ddc84; font-weight:700; font-size:14px; padding:8px 20px;">🚀 Launch team</button>
       </div>
   </div>
 </div>
 
-<!-- Modal: Evden İşe Geliş / Loading Ekranı -->
+<!-- Modal: workers arriving (loading screen) -->
 <div id="commuteModal" style="display:none; position:fixed; inset:0; background:rgba(5,5,10,0.88); z-index:10000; align-items:center; justify-content:center; backdrop-filter:blur(6px);">
   <div style="background:#141424; border:3px solid var(--gold); border-radius:12px; width:560px; max-width:92vw; padding:24px; display:flex; flex-direction:column; gap:16px; box-shadow:0 12px 48px rgba(0,0,0,0.95); text-align:center;">
     <div style="font-family:'Press Start 2P', monospace; font-size:14px; color:var(--gold); line-height:1.6;">
-      🚕 MESAİ BAŞLIYOR...
+      🚕 SHIFT STARTING...
     </div>
     <div style="font-size:13px; color:var(--dim); margin-top:-6px;">
-      Çalışanlar evden çıkıp ofise doğru yola koyuldu!
+      The workers have left home and are on their way to the office!
     </div>
     
     <!-- Workers Arrival Tracker List -->
@@ -181,7 +181,7 @@
 
     <!-- Overall Progress Status -->
     <div id="commuteStatus" style="font-size:13px; font-weight:600; color:var(--ink); padding:8px; background:#1b1b30; border-radius:6px; border:1px solid var(--line);">
-      Hazırlanıyor...
+      Getting ready...
     </div>
   </div>
 </div>
@@ -758,16 +758,17 @@ function addWorkerRow(w = {}) {
   const container = document.getElementById('workersContainer');
   const div = document.createElement('div');
   div.className = 'worker-row';
+  div.dataset.prompt = w.prompt || '';
   div.style.cssText = 'display:grid; grid-template-columns:140px 100px 1fr 34px; gap:8px; align-items:center; background:#111120; border:1px solid var(--line); border-radius:6px; padding:8px;';
   div.innerHTML = `
-    <input type="text" class="w-label" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-size:12.5px;" placeholder="Etiket (NIM-1)" value="${w.label || ''}" />
+    <input type="text" class="w-label" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-size:12.5px;" placeholder="Label (e.g. nemo-a-ultra)" value="${esc(w.label || '')}" />
     <select class="w-tool" style="padding:6px 4px; background:#1b1b2f; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-size:12.5px;">
       <option value="opencode" ${w.tool === 'opencode' ? 'selected' : ''}>opencode</option>
       <option value="agy" ${w.tool === 'agy' ? 'selected' : ''}>agy</option>
       <option value="claude" ${w.tool === 'claude' ? 'selected' : ''}>claude</option>
     </select>
-    <input type="text" class="w-model" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-family:ui-monospace,monospace; font-size:12px;" placeholder="Model (nim-1/z-ai/glm-5.3-flash)" value="${w.model || ''}" />
-    <button onclick="this.parentElement.remove()" style="background:#3a1820; border:1px solid #ff4d6d; color:#ff4d6d; padding:4px 8px; border-radius:4px; cursor:pointer;" title="Kaldır">✕</button>
+    <input type="text" class="w-model" style="padding:6px 8px; background:#0e0e18; border:1px solid var(--line); border-radius:4px; color:var(--ink); font-family:ui-monospace,monospace; font-size:12px;" placeholder="Model (e.g. nvidia-a/nvidia/nemotron-3-ultra-550b-a55b)" value="${esc(w.model || '')}" />
+    <button onclick="this.parentElement.remove()" style="background:#3a1820; border:1px solid #ff4d6d; color:#ff4d6d; padding:4px 8px; border-radius:4px; cursor:pointer;" title="Remove">✕</button>
   `;
   container.appendChild(div);
 }
@@ -786,13 +787,15 @@ async function openOrchModal() {
     container.innerHTML = '';
     (cfg.workers || []).forEach((w) => addWorkerRow(w));
   } catch (e) {
-    toast('Konfigürasyon yüklenemedi: ' + e.message);
+    toast('Could not load the team config: ' + e.message);
   }
 }
 
 function closeOrchModal() {
   document.getElementById('orchModal').style.display = 'none';
 }
+
+const DEFAULT_WORKER_PROMPT = 'Get ready and wait for a task.';
 
 function collectOrchForm() {
   const cwd = document.getElementById('inputCwd').value.trim() || undefined;
@@ -807,7 +810,7 @@ function collectOrchForm() {
     const tool = row.querySelector('.w-tool').value;
     const model = row.querySelector('.w-model').value.trim();
     if (label || model) {
-      workers.push({ label: label || model || tool, tool, model, prompt: 'Hazır ol ve bekle.' });
+      workers.push({ label: label || model || tool, tool, model, prompt: row.dataset.prompt || DEFAULT_WORKER_PROMPT });
     }
   });
   return { cwd, coordinator, workers };
@@ -822,30 +825,30 @@ async function saveOrchConfig() {
       body: JSON.stringify(payload),
     });
     const j = await r.json();
-    if (j.ok) toast('Kadro şablonu başarıyla kaydedildi! 💾');
-    else throw new Error(j.error || 'Bilinmeyen hata');
+    if (j.ok) toast('Team saved 💾');
+    else throw new Error(j.error || 'Unknown error');
   } catch (e) {
-    toast('Hata: ' + e.message);
+    toast('Error: ' + e.message);
   }
 }
 
 async function launchOrchestra() {
   const payload = collectOrchForm();
   if (!payload.workers.length) {
-    alert("Lütfen en az bir çalışan ekleyin.");
+    alert("Add at least one worker.");
     return;
   }
 
-  // 1. Setup modalını kapat, Evden İşe Geliş modalını aç
+  // Close the setup dialog and show the arrivals screen
   closeOrchModal();
   const cModal = document.getElementById('commuteModal');
   const cList = document.getElementById('commuteList');
   const cStatus = document.getElementById('commuteStatus');
   cModal.style.display = 'flex';
   cList.innerHTML = '';
-  cStatus.textContent = 'Çalışanlara haber veriliyor...';
+  cStatus.textContent = 'Calling the workers in...';
 
-  // Ayarları arka planda kaydet
+  // Save the team in the background
   try {
     await fetch('/api/orchestra/save', {
       method: 'POST',
@@ -854,27 +857,27 @@ async function launchOrchestra() {
     });
   } catch {}
 
-  // Listede çalışan kartlarını oluştur
+  // One card per worker
   const workerItems = payload.workers.map((w) => {
     const card = document.createElement('div');
     card.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:#0e0e1a; border:1px solid var(--line); border-radius:6px; padding:10px 14px;';
     card.innerHTML = `
       <div>
-        <b style="color:var(--ink); font-size:13px;">${w.label}</b>
-        <div style="font-size:11px; color:var(--dim); font-family:ui-monospace,monospace;">${w.model || w.tool}</div>
+        <b style="color:var(--ink); font-size:13px;">${esc(w.label)}</b>
+        <div style="font-size:11px; color:var(--dim); font-family:ui-monospace,monospace;">${esc(w.model || w.tool)}</div>
       </div>
-      <div class="c-step" style="font-size:12.5px; font-weight:600; color:var(--warn);">🏠 Evden çıktı...</div>
+      <div class="c-step" style="font-size:12.5px; font-weight:600; color:var(--warn);">🏠 Left home...</div>
     `;
     cList.appendChild(card);
     return { card, step: card.querySelector('.c-step'), worker: w };
   });
 
-  // Her çalışanı sırayla ve hızlıca aç (kapıdan içeri girme animasyonuyla)
+  // Open each worker in turn (they walk in through the office door)
   for (let i = 0; i < workerItems.length; i++) {
     const item = workerItems[i];
-    item.step.textContent = '🚌 Yolda geliyor...';
+    item.step.textContent = '🚌 On the way...';
     item.step.style.color = 'var(--gold)';
-    cStatus.textContent = `${item.worker.label} ofise geliyor (${i + 1}/${workerItems.length})...`;
+    cStatus.textContent = `${item.worker.label} is arriving (${i + 1}/${workerItems.length})...`;
 
     try {
       const res = await fetch('/api/orchestra/launch-worker', {
@@ -884,27 +887,27 @@ async function launchOrchestra() {
       });
       const data = await res.json();
       if (data.ok) {
-        item.step.textContent = '💼 Masasına oturdu! ✓';
+        item.step.textContent = '💼 At the desk ✓';
         item.step.style.color = '#3ddc84';
         item.card.style.borderColor = '#1f5a3f';
-        toast(`🚪 ${item.worker.label} ofise ulaştı!`);
-        poll(); // Anında canvası güncelle, piksel karakter kapıdan yürüsün
+        toast(`🚪 ${item.worker.label} arrived`);
+        poll(); // redraw now so the pixel worker walks in through the door
       } else {
-        item.step.textContent = '❌ ' + (data.error || 'Açılamadı');
+        item.step.textContent = '❌ ' + (data.error || 'Could not start');
         item.step.style.color = 'var(--err)';
       }
     } catch (e) {
-      item.step.textContent = '❌ Bağlantı hatası';
+      item.step.textContent = '❌ Connection error';
       item.step.style.color = 'var(--err)';
     }
 
-    // Doğal bir akış için çalışanlar arası kısa bekleme
+    // A short pause between workers so arrivals feel natural
     await new Promise((r) => setTimeout(r, 600));
   }
 
-  // Tüm çalışanlar geldiğinde koordinatör terminalini aç
+  // Once everyone is in, open the coordinator terminal
   if (payload.coordinator?.autoOpenTerminal !== false) {
-    cStatus.textContent = '🚀 Baş Koordinatör Terminali açılıyor...';
+    cStatus.textContent = '🚀 Opening the coordinator terminal...';
     try {
       await fetch('/api/orchestra/open-terminal', {
         method: 'POST',
@@ -914,8 +917,8 @@ async function launchOrchestra() {
     } catch {}
   }
 
-  cStatus.innerHTML = '<span style="color:#3ddc84; font-weight:700;">🎉 TÜM EKİP OFİSTE! İYİ ÇALIŞMALAR, PATRON!</span>';
-  toast('Tüm çalışanlar masalarına oturdu! 🚀');
+  cStatus.innerHTML = '<span style="color:#3ddc84; font-weight:700;">🎉 THE WHOLE TEAM IS IN. HAVE A GOOD SHIFT, BOSS!</span>';
+  toast('Every worker is at their desk 🚀');
   poll();
 
   setTimeout(() => {
@@ -924,17 +927,17 @@ async function launchOrchestra() {
 }
 
 async function stopOrchestra() {
-  if (!confirm('Tüm canlı çalışan oturumlarını kapatmak istediğinize emin misiniz?')) return;
-  toast('Oturumlar kapatılıyor...');
+  if (!confirm('Close every live worker session?')) return;
+  toast('Closing sessions...');
   try {
     const r = await fetch('/api/orchestra/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     const j = await r.json();
     if (j.ok) {
-      toast(`Orkestra durduruldu (${j.closedCount} oturum kapatıldı). 🛑`);
+      toast(`Team stopped (${j.closedCount} sessions closed) 🛑`);
       setTimeout(poll, 1000);
     }
   } catch (e) {
-    toast('Hata: ' + e.message);
+    toast('Error: ' + e.message);
   }
 }
 

@@ -89,7 +89,7 @@ orch up --cwd "D:\MyProject" --terminal
 orch down
 ```
 
-Or open `http://localhost:4747` and click **`[🚀 Orkestra Yönetimi]`** to dynamically customize workers, models, and working directories from the UI.
+Or open `http://localhost:4747` and click **`[🚀 Team launcher]`** to dynamically customize workers, models, and working directories from the UI.
 
 Then just ask Claude Code something like:
 

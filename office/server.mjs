@@ -87,7 +87,7 @@ function launchCoordinatorWindow(cwd, coordinator) {
         `cd /d "${cwd}"`,
         'title ORCH Coordinator - OpenCode',
         'echo ====================================================',
-        'echo        ORCH OFFICE - Bas Koordinator CLI',
+        'echo        ORCH OFFICE - Lead Coordinator CLI',
         'echo ====================================================',
         'echo.',
         'opencode',
@@ -364,11 +364,11 @@ createServer(async (req, res) => {
                 cwd: homedir(),
                 coordinator: { tool: "opencode", model: "opencode/space-bunny-free", autoOpenTerminal: true },
                 workers: [
-                    { id: "1", tool: "opencode", model: "nim-1/z-ai/glm-5.3-flash", label: "NIM-Worker-1", prompt: "Hazır ol ve bekle." },
-                    { id: "2", tool: "opencode", model: "nim-2/z-ai/glm-5.3-flash", label: "NIM-Worker-2", prompt: "Hazır ol ve bekle." },
-                    { id: "3", tool: "opencode", model: "nim-3/z-ai/glm-5.3-flash", label: "NIM-Worker-3", prompt: "Hazır ol ve bekle." },
-                    { id: "4", tool: "agy", model: "", label: "AGY Worker", prompt: "Hazır ol ve bekle." },
-                    { id: "5", tool: "opencode", model: "openrouter/openrouter/free", label: "OpenRouter-Free", prompt: "Hazır ol ve bekle." }
+                    { id: "1", tool: "opencode", model: "nim-1/z-ai/glm-5.3-flash", label: "NIM-Worker-1", prompt: "Get ready and wait for a task." },
+                    { id: "2", tool: "opencode", model: "nim-2/z-ai/glm-5.3-flash", label: "NIM-Worker-2", prompt: "Get ready and wait for a task." },
+                    { id: "3", tool: "opencode", model: "nim-3/z-ai/glm-5.3-flash", label: "NIM-Worker-3", prompt: "Get ready and wait for a task." },
+                    { id: "4", tool: "agy", model: "", label: "AGY Worker", prompt: "Get ready and wait for a task." },
+                    { id: "5", tool: "opencode", model: "openrouter/openrouter/free", label: "OpenRouter-Free", prompt: "Get ready and wait for a task." }
                 ]
             };
             if (existsSync(TEAM_CONFIG_PATH)) {
