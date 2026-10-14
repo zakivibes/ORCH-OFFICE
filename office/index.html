@@ -467,12 +467,33 @@ const COLS = [
   ['turns', 'Turns', (w) => w.turns],
   ['calls', 'Tool calls', (w) => w.toolCalls],
   ['processed', 'Processed', (w) => processed(w.totals)],
+  ['budget', 'Budget', (w) => budgetUsed(w)],
   ['generated', 'Generated', (w) => generated(w.totals)],
   ['fresh', 'Fresh in', (w) => n(w.totals?.inputTokens)],
   ['cached', 'Cached in', (w) => cached(w.totals)],
   ['rate', 'Tok/min', (w) => w.current?.tokensPerMin ?? 0],
   ['last', 'Last activity', (w) => w.lastAt],
 ];
+
+// Share of the session token budget used (tokens read = fresh input + cache read; the daemon
+// stops the session at 100%). Closed sessions show '—'.
+// Per-model overrides (first match on "provider/model") win, as in the daemon.
+const budgetMax = (w) => {
+  const o = (data.limits?.overrides || []).find((x) => x?.match && String(w.model || '').includes(x.match));
+  return Number((o && o.maxSessionReadTokens !== undefined ? o.maxSessionReadTokens : data.limits?.maxSessionReadTokens) || 0);
+};
+const budgetUsed = (w) => {
+  const max = budgetMax(w);
+  return max ? (n(w.totals?.inputTokens) + n(w.totals?.cacheReadTokens)) / max : 0;
+};
+function budgetCell(w) {
+  if (w.closedAt) return '<span class="hint">—</span>';
+  const max = budgetMax(w);
+  if (!max) return '<span class="hint" title="no token budget for this model">∞</span>';
+  const p = budgetUsed(w), pct = Math.round(p * 100);
+  const color = p >= 1 ? '#ff6b6b' : p >= 0.8 ? '#ffb020' : 'var(--dim)';
+  return `<span style="color:${color}" title="of ${fmtTok(max)} read tokens">${pct}%</span>`;
+}
 
 function renderDash() {
   if (ui.view !== 'dash') return;
@@ -512,13 +533,14 @@ function renderDash() {
       <td ${w.current ? `data-since="${w.current.startedAt}"` : ''}>${w.current ? dur(nowS() - w.current.startedAt) : '—'}</td>
       <td>${w.turns}</td><td>${w.toolCalls.toLocaleString()}</td>
       <td title="${processed(w.totals).toLocaleString()}">${fmtTok(processed(w.totals))}</td>
+      <td>${budgetCell(w)}</td>
       <td>${fmtTok(generated(w.totals))}</td><td>${fmtTok(w.totals?.inputTokens)}</td><td>${fmtTok(cached(w.totals))}</td>
       <td>${w.current?.tokensPerMin ? fmtTok(w.current.tokensPerMin) : '—'}</td>
       <td>${ago(w.lastAt)}</td>
       <td>${spark(w.turnRows.map((t) => processed(t.usage)), 90, 22, COLORS[w.tool])}</td></tr>`).join('');
   const head = COLS.map(([k, label, , cls]) => `<th class="${cls || ''}" onclick="sortBy('${k}')">${label}${ui.sort === k ? (ui.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') + '<th>Per-turn trend</th>';
   const foot = `<tr><td>Total · ${ws.length} workers</td><td></td><td></td><td></td><td>${sum((w) => w.turns)}</td><td>${sum((w) => w.toolCalls).toLocaleString()}</td>
-      <td>${fmtTok(sum((w) => processed(w.totals)))}</td><td>${fmtTok(sum((w) => generated(w.totals)))}</td><td>${fmtTok(sum((w) => n(w.totals?.inputTokens)))}</td>
+      <td>${fmtTok(sum((w) => processed(w.totals)))}</td><td></td><td>${fmtTok(sum((w) => generated(w.totals)))}</td><td>${fmtTok(sum((w) => n(w.totals?.inputTokens)))}</td>
       <td>${fmtTok(sum((w) => cached(w.totals)))}</td><td>${fmtTok(sum((w) => w.current?.tokensPerMin ?? 0))}</td><td></td><td></td></tr>`;
 
   // tool usage across the team

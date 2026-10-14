@@ -314,12 +314,27 @@ function workers(hours) {
 
 const html = () => readFileSync(join(HERE, 'index.html'));
 
+
+// Session budget, from the same file the daemon reads (src/core/limits.ts), so the dashboard can
+// show how close each worker is to being stopped.
+function sessionLimits() {
+    const file = process.env.ORCH_LIMITS_FILE || join(homedir(), '.orchestrator', 'limits.json');
+    let cfg = {};
+    try { cfg = JSON.parse(readFileSync(file, 'utf8')); } catch { /* defaults */ }
+    const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+    return {
+        maxSessionReadTokens: num(cfg.maxSessionReadTokens ?? process.env.ORCH_MAX_SESSION_READ_TOKENS, 60_000_000),
+        maxTurnSteps: num(cfg.maxTurnSteps ?? process.env.ORCH_MAX_TURN_STEPS, 250),
+        overrides: Array.isArray(cfg.overrides) ? cfg.overrides : [],
+    };
+}
+
 createServer((req, res) => {
     try {
         const url = new URL(req.url, 'http://localhost');
         if (url.pathname === '/api/workers') {
             const hours = Math.min(24 * 30, Math.max(0.25, Number(url.searchParams.get('hours')) || DEFAULT_HOURS));
-            const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, workers: workers(hours) });
+            const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, limits: sessionLimits(), workers: workers(hours) });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             return res.end(body);
         }

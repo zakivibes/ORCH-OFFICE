@@ -233,6 +233,7 @@ export class OpencodeAdapter implements Adapter {
     // message.updated carries that message's own totals. Keep the latest figures
     // per message and sum them; overwriting kept only the last step of the turn.
     const perMessage = new Map<string, { usage: Usage; cost: number }>();
+    let lastProgressAt = 0;
     const assistantIds = new Set<string>();
     // opencode sends the *cumulative* text of a part on each update, so we
     // remember what we already emitted per message and send only the suffix.
@@ -347,6 +348,11 @@ export class OpencodeAdapter implements Adapter {
             });
             usage = [...perMessage.values()].reduce((acc, m) => addUsage(acc, m.usage), zeroUsage());
             costUsd = [...perMessage.values()].reduce((acc, m) => acc + m.cost, 0);
+            // Throttled running total so the registry can enforce token budgets mid-turn.
+            if (Date.now() - lastProgressAt > 5000) {
+              lastProgressAt = Date.now();
+              yield { t: "usage.progress", usage };
+            }
           }
           continue;
         }
