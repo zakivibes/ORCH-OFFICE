@@ -396,7 +396,8 @@ async function main() {
         const coordModel = teamConfig.coordinator?.model;
         const cmd = coordModel ? `opencode --model ${coordModel}` : "opencode";
         console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
-        const term = spawn("cmd.exe", ["/c", "start", "cmd.exe", "/k", `cd /d "${cwd}" && ${cmd}`], {
+        const term = spawn("cmd.exe", ["/c", "start", "Coordinator", "cmd.exe", "/k", cmd], {
+          cwd,
           detached: true,
           stdio: "ignore",
         });

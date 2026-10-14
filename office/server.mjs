@@ -368,7 +368,8 @@ createServer(async (req, res) => {
             const coordModel = coordinator.model;
             const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
             if (process.platform === 'win32') {
-                const term = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `cd /d "${cwd}" && ${cmd}`], {
+                const term = spawn('cmd.exe', ['/c', 'start', 'Coordinator', 'cmd.exe', '/k', cmd], {
+                    cwd,
                     detached: true,
                     stdio: 'ignore'
                 });
@@ -408,7 +409,8 @@ createServer(async (req, res) => {
             if (openTerm && process.platform === 'win32') {
                 const coordModel = body.coordinator?.model;
                 const cmd = coordModel ? `opencode --model ${coordModel}` : 'opencode';
-                const term = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `cd /d "${cwd}" && ${cmd}`], {
+                const term = spawn('cmd.exe', ['/c', 'start', 'Coordinator', 'cmd.exe', '/k', cmd], {
+                    cwd,
                     detached: true,
                     stdio: 'ignore'
                 });
