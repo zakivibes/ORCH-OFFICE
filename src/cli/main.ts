@@ -394,7 +394,14 @@ async function main() {
       const openTerm = flag("--terminal") || teamConfig.coordinator?.autoOpenTerminal;
       if (openTerm && process.platform === "win32") {
         const coordModel = teamConfig.coordinator?.model;
-        const cmd = coordModel ? `opencode --model "${coordModel}"` : "opencode";
+        const ocConfigPath = join(homedir(), ".config", "opencode", "opencode.jsonc");
+        if (coordModel && existsSync(ocConfigPath)) {
+          try {
+            const raw = readFileSync(ocConfigPath, "utf8");
+            const updated = raw.replace(/"model":\s*"[^"]*"/, `"model": "${coordModel}"`);
+            writeFileSync(ocConfigPath, updated, "utf8");
+          } catch {}
+        }
         console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
         const batPath = join(homedir(), ".orchestrator", "run-coordinator.bat");
         const content = [
@@ -405,7 +412,7 @@ async function main() {
           "echo        ORCH OFFICE - Bas Koordinator CLI",
           "echo ====================================================",
           "echo.",
-          cmd,
+          "opencode",
           "cmd /k",
         ].join("\r\n");
         writeFileSync(batPath, content, "utf8");

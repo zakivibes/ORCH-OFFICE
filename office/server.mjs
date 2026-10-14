@@ -67,7 +67,17 @@ function readBodyJson(req) {
 function launchCoordinatorWindow(cwd, coordinator) {
     if (process.platform !== 'win32') return;
     const coordModel = coordinator?.model;
-    const cmd = coordModel ? `opencode --model "${coordModel}"` : 'opencode';
+
+    if (coordModel && existsSync(OPENCODE_CONFIG_PATH)) {
+        try {
+            const raw = readFileSync(OPENCODE_CONFIG_PATH, 'utf8');
+            const updated = raw.replace(/"model":\s*"[^"]*"/, `"model": "${coordModel}"`);
+            writeFileSync(OPENCODE_CONFIG_PATH, updated, 'utf8');
+        } catch (err) {
+            console.error('Failed to update coordinator model in opencode.jsonc:', err);
+        }
+    }
+
     const batPath = join(homedir(), '.orchestrator', 'run-coordinator.bat');
     const content = [
         '@echo off',
@@ -77,7 +87,7 @@ function launchCoordinatorWindow(cwd, coordinator) {
         'echo        ORCH OFFICE - Bas Koordinator CLI',
         'echo ====================================================',
         'echo.',
-        cmd,
+        'opencode',
         'cmd /k'
     ].join('\r\n');
     writeFileSync(batPath, content, 'utf8');
