@@ -36,9 +36,12 @@ export type Event =
   | { t: "turn.completed"; usage: Usage; costUsd?: number; durationMs: number; turns: number }
   /** One model step's own usage, emitted as it lands so dashboards can count mid-turn. */
   | { t: "usage.step"; usage: Usage }
+  /** The turn's usage SO FAR (a running total, not a delta), for adapters that only see totals. */
+  | { t: "usage.progress"; usage: Usage }
   | {
       t: "error";
-      kind: "rate_limit" | "api" | "crash";
+      /** "budget": the orchestrator stopped the turn because a configured limit was reached. */
+      kind: "rate_limit" | "api" | "crash" | "budget";
       message: string;
       retryAfterMs?: number;
     }

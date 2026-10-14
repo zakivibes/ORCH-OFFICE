@@ -24,6 +24,40 @@ export function workerShellEnabled(policy: Policy): boolean {
   }
 }
 
+/**
+ * Owner opt-in (~/.orchestrator/config.json "workerMcp"): which MCP servers opencode workers get.
+ *
+ *   "workerMcp": {
+ *     "disable": ["Blender", "Roblox_Studio"],             // servers from opencode.json to switch off
+ *     "add": { "graphify": { "type": "local", "command": ["graphify-mcp"] } }
+ *   }
+ *
+ * Every enabled MCP server's tool definitions ride along in EVERY request a worker makes, so a
+ * server the worker never uses costs tokens on each step. Read per spawn; returns the opencode
+ * `mcp` block to merge into the inline config, or undefined when nothing is configured.
+ */
+export function workerMcpConfig(): Record<string, unknown> | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(join(homedir(), ".orchestrator", "config.json"), "utf8")) as {
+      workerMcp?: { disable?: unknown; add?: unknown };
+    };
+    const w = cfg.workerMcp;
+    if (!w || typeof w !== "object") return undefined;
+    const mcp: Record<string, unknown> = {};
+    if (Array.isArray(w.disable)) {
+      for (const name of w.disable) if (typeof name === "string" && name) mcp[name] = { enabled: false };
+    }
+    if (w.add && typeof w.add === "object") {
+      for (const [name, def] of Object.entries(w.add as Record<string, unknown>)) {
+        if (def && typeof def === "object") mcp[name] = { enabled: true, ...(def as object) };
+      }
+    }
+    return Object.keys(mcp).length ? mcp : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Claude Code tool name -> opencode permission key. */
 const CLAUDE_TO_OPENCODE: Record<string, string> = {
   Bash: "bash",

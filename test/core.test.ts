@@ -160,6 +160,32 @@ test("agy 1.3 tool steps say \"tool\" and per-step usage sums to the result", as
   }
 });
 
+test("agy: an empty failed turn reports the logged reason and its reset time", async () => {
+  const { agyLastLoggedError, parseResetIn } = await import("../src/adapters/agy.js");
+  const log = [
+    "I1014 05:28:52.653956     258 quota_manager.go:45] doRefreshQuota: starting reload (force=true)",
+    "E1014 05:28:54.276377     568 errorreport.go:224] agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 47m26s.",
+  ].join("\n");
+  const reason = agyLastLoggedError(log, "/nonexistent");
+  assert.match(reason, /RESOURCE_EXHAUSTED/);
+  assert.ok(!reason.startsWith("E1014"), "the glog prefix is stripped");
+  assert.equal(parseResetIn(reason), (47 * 60 + 26) * 1000);
+  assert.equal(parseResetIn("Resets in 1h2m"), 62 * 60 * 1000);
+  assert.equal(parseResetIn("no reset here"), undefined);
+});
+
+test("AsyncQueue.drain discards buffered items so a new turn starts clean", async () => {
+  const { AsyncQueue } = await import("../src/core/queue.js");
+  const q = new AsyncQueue<string>();
+  q.push("stale-idle");
+  q.push("stale-error");
+  assert.equal(q.drain(), 2);
+  assert.equal(q.size, 0);
+  q.push("fresh");
+  const it = q[Symbol.asyncIterator]();
+  assert.deepEqual(await it.next(), { value: "fresh", done: false });
+});
+
 test("store round-trips sessions, turns and events", () => {
   const store = scratchDb();
   const id = "sess-1";

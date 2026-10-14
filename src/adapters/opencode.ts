@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { toOpencodePermission } from "../permissions/translate.js";
+import { toOpencodePermission, workerMcpConfig } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import { resolveBinary } from "../core/bin.js";
@@ -89,7 +89,8 @@ export class OpencodeAdapter implements Adapter {
 
     // opencode reads OPENCODE_CONFIG for inline config, so the translated
     // permission block is injected without touching the user's own file.
-    const inline = JSON.stringify({ ...toOpencodePermission(this.policy), $schema: undefined });
+    const mcp = workerMcpConfig();
+    const inline = JSON.stringify({ ...toOpencodePermission(this.policy), ...(mcp ? { mcp } : {}), $schema: undefined });
 
     if (process.env.ORCH_DEBUG) {
       process.stderr.write(`[opencode cfg] ${inline}\n`);
@@ -242,6 +243,7 @@ export class OpencodeAdapter implements Adapter {
     // message.updated carries that message's own totals. Keep the latest figures
     // per message and sum them; overwriting kept only the last step of the turn.
     const perMessage = new Map<string, { usage: Usage; cost: number }>();
+    let lastProgressAt = 0;
     const assistantIds = new Set<string>();
     // opencode sends the *cumulative* text of a part on each update, so we
     // remember what we already emitted per message and send only the suffix.
@@ -264,6 +266,12 @@ export class OpencodeAdapter implements Adapter {
       }
     }
 
+    // The event queue is shared across turns. A turn that ended on an error or an abort can
+    // leave its trailing events (session.idle, session.error) buffered; the next turn would read
+    // that stale idle first and "complete" instantly with nothing done. Discard the leftovers.
+    entry.events.drain();
+    let sawActivity = false;
+
     // prompt_async so the SSE stream carries progress; we end on message.completed.
     void this.post(entry, `/session/${entry.sessionId}/prompt_async`, {
       method: "POST",
@@ -276,6 +284,10 @@ export class OpencodeAdapter implements Adapter {
         if (marker) { yield marker; continue; }
         const type = String(ev.type ?? "");
         const props = (ev.properties ?? {}) as Record<string, unknown>;
+
+        if (type === "message.updated" || type === "message.part.updated" || type === "message.part.delta") {
+          sawActivity = true;
+        }
 
         if (type === "message.part.updated" || type === "message.part.delta") {
           const part = (props.part ?? props.delta ?? {}) as Record<string, unknown>;
@@ -346,6 +358,11 @@ export class OpencodeAdapter implements Adapter {
             });
             usage = [...perMessage.values()].reduce((acc, m) => addUsage(acc, m.usage), zeroUsage());
             costUsd = [...perMessage.values()].reduce((acc, m) => acc + m.cost, 0);
+            // Throttled running total so the registry can enforce token budgets mid-turn.
+            if (Date.now() - lastProgressAt > 5000) {
+              lastProgressAt = Date.now();
+              yield { t: "usage.progress", usage };
+            }
           }
           continue;
         }
@@ -357,6 +374,10 @@ export class OpencodeAdapter implements Adapter {
           return;
         }
 
+        if ((type === "session.idle" || type === "message.completed.idle") && !sawActivity && Date.now() - startedAt < 3000) {
+          // A late idle from the previous turn, arriving before this turn did anything: ignore.
+          continue;
+        }
         if (type === "session.idle" || type === "message.completed.idle") {
           const flushed = coalescer.flush();
           if (flushed) yield { t: "text.delta", text: flushed };

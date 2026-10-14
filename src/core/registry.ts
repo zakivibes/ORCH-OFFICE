@@ -6,7 +6,9 @@ import { Policy, type NarrowRequest } from "../permissions/policy.js";
 import { ClaudeAdapter } from "../adapters/claude.js";
 import { AgyAdapter } from "../adapters/agy.js";
 import { OpencodeAdapter } from "../adapters/opencode.js";
+import { fmtTokens, loadLimits, readTokens } from "./limits.js";
 import {
+  addUsage,
   zeroUsage,
   type Adapter,
   type Event,
@@ -169,30 +171,95 @@ export class Registry extends EventEmitter {
       return;
     }
 
+    // Limits are re-read every turn so ~/.orchestrator/limits.json can be tuned live.
+    const stored = this.store.getSession(args.sessionId);
+    const limits = loadLimits(stored?.model ?? handle.model);
+    const sessionReadBefore = stored ? readTokens(stored.totals) : 0;
+    if (limits.maxSessionReadTokens > 0 && sessionReadBefore >= limits.maxSessionReadTokens) {
+      yield {
+        t: "error",
+        kind: "budget",
+        message:
+          `session budget reached: it has read ${fmtTokens(sessionReadBefore)} tokens ` +
+          `(limit ${fmtTokens(limits.maxSessionReadTokens)}). Close it and open a fresh session ` +
+          `with a short hand-off; a long session re-reads its whole history on every step.`,
+      };
+      return;
+    }
+    if (
+      limits.maxSessionReadTokens > 0 &&
+      sessionReadBefore >= limits.maxSessionReadTokens * limits.warnAtFraction
+    ) {
+      yield {
+        t: "text.delta",
+        text:
+          `[orch budget] this session has read ${fmtTokens(sessionReadBefore)} of ` +
+          `${fmtTokens(limits.maxSessionReadTokens)} tokens; plan to hand off to a fresh session.\n`,
+      };
+    }
+
     const turnId = this.store.startTurn(args.sessionId, args.prompt);
     let usage = zeroUsage();
     let costUsd = 0;
-    let aborted = false;
     let resultText = "";
     let completed = false;
+    // Running usage for limits and for turns that end without a turn.completed: agy reports
+    // per-step deltas (usage.step), opencode a running total (usage.progress).
+    let stepSum = zeroUsage();
+    let progress = zeroUsage();
+    let steps = 0;
+    let stopReason = "";
 
     for await (const ev of adapter.send(handle, args.prompt, args.signal)) {
       this.store.appendEvent(args.sessionId, ev);
       this.emit("event", args.sessionId, ev);
 
       if (ev.t === "text.delta") resultText += ev.text;
+      if (ev.t === "tool.call") steps += 1;
+      if (ev.t === "usage.step") stepSum = addUsage(stepSum, ev.usage);
+      if (ev.t === "usage.progress") progress = ev.usage;
       if (ev.t === "turn.completed") {
         usage = ev.usage;
         costUsd = ev.costUsd ?? 0;
         completed = true;
       }
-      if (ev.t === "error" && ev.kind === "rate_limit") aborted = true;
 
       yield ev;
 
       if (ev.t === "turn.completed" || ev.t === "error") break;
+
+      const turnRead = Math.max(readTokens(stepSum), readTokens(progress));
+      if (limits.maxTurnSteps > 0 && steps > limits.maxTurnSteps) {
+        stopReason = `turn stopped after ${steps} tool calls (limit ${limits.maxTurnSteps}); the agent is probably looping`;
+      } else if (limits.maxTurnReadTokens > 0 && turnRead > limits.maxTurnReadTokens) {
+        stopReason = `turn stopped after reading ${fmtTokens(turnRead)} tokens (limit ${fmtTokens(limits.maxTurnReadTokens)})`;
+      } else if (
+        limits.maxSessionReadTokens > 0 &&
+        sessionReadBefore + turnRead > limits.maxSessionReadTokens
+      ) {
+        stopReason = `session budget reached mid-turn: ${fmtTokens(sessionReadBefore + turnRead)} tokens read (limit ${fmtTokens(limits.maxSessionReadTokens)})`;
+      }
+      if (stopReason) {
+        try {
+          await adapter.interrupt(handle);
+        } catch {
+          /* the stop is recorded either way */
+        }
+        const stop: Event = {
+          t: "error",
+          kind: "budget",
+          message: `${stopReason}. Work so far is kept; review it, then continue in a fresh session with a short hand-off.`,
+        };
+        this.store.appendEvent(args.sessionId, stop);
+        this.emit("event", args.sessionId, stop);
+        yield stop;
+        break;
+      }
     }
 
+    // A turn that never completed (stopped, errored, aborted) still consumed tokens: record what
+    // was seen so the session totals and the budget stay honest.
+    if (!completed) usage = readTokens(stepSum) >= readTokens(progress) ? stepSum : progress;
     this.store.endTurn(turnId, { usage, costUsd, aborted: !completed, resultText });
     this.store.accumulate(args.sessionId, usage, costUsd);
   }

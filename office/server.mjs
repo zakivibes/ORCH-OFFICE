@@ -23,7 +23,10 @@ const STALL_MS = Number(process.env.ORCH_STALL_MINUTES ?? 10) * 60_000;
 
 const TEAM_CONFIG_PATH = join(homedir(), '.orchestrator', 'team.json');
 const DAEMON_PID_PATH = join(homedir(), '.orchestrator', 'daemon.json');
-const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.jsonc');
+// opencode accepts either name; use the one this machine actually has (.json first).
+const OPENCODE_CONFIG_PATH = ['opencode.json', 'opencode.jsonc']
+    .map((f) => join(homedir(), '.config', 'opencode', f))
+    .find((f) => existsSync(f)) ?? join(homedir(), '.config', 'opencode', 'opencode.json');
 const DAEMON_ENTRY_PATH = join(HERE, '..', 'dist', 'core', 'daemon-entry.js');
 
 function getDaemonPort() {
@@ -140,7 +143,7 @@ function launchCoordinatorWindow(cwd, coordinator) {
         `cd /d "${cwd}"`,
         `title ${title}`,
         'echo ====================================================',
-        `echo        ORCH OFFICE - Bas Koordinator CLI (${tool.toUpperCase()})`,
+        `echo        ORCH OFFICE - Lead Coordinator CLI (${tool.toUpperCase()})`,
         'echo ====================================================',
         'echo.',
         execCmd,
@@ -374,25 +377,54 @@ function workers(hours) {
 
 const html = () => readFileSync(join(HERE, 'index.html'));
 
+
+// Session budget, from the same file the daemon reads (src/core/limits.ts), so the dashboard can
+// show how close each worker is to being stopped.
+function sessionLimits() {
+    const file = process.env.ORCH_LIMITS_FILE || join(homedir(), '.orchestrator', 'limits.json');
+    let cfg = {};
+    try { cfg = JSON.parse(readFileSync(file, 'utf8')); } catch { /* defaults */ }
+    const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+    return {
+        maxSessionReadTokens: num(cfg.maxSessionReadTokens ?? process.env.ORCH_MAX_SESSION_READ_TOKENS, 60_000_000),
+        maxTurnSteps: num(cfg.maxTurnSteps ?? process.env.ORCH_MAX_TURN_STEPS, 250),
+        overrides: Array.isArray(cfg.overrides) ? cfg.overrides : [],
+    };
+}
+
+// The orchestra endpoints start and stop agents and can write the opencode config, so only this
+// page may call them. Binding to 127.0.0.1 is not enough on its own: any website open in the
+// browser can send a "simple" cross-site POST to localhost. Requiring a JSON content type forces a
+// CORS preflight (which this server never approves), and a foreign Origin is refused outright.
+function sameOriginJson(req) {
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://localhost:${PORT}` && origin !== `http://127.0.0.1:${PORT}`) return false;
+    return String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json');
+}
+
 createServer(async (req, res) => {
     try {
         const url = new URL(req.url, 'http://localhost');
+        if (req.method !== 'GET' && url.pathname.startsWith('/api/') && !sameOriginJson(req)) {
+            res.writeHead(403, { 'content-type': 'application/json' });
+            return res.end(JSON.stringify({ ok: false, error: 'cross-origin or non-JSON request refused' }));
+        }
         if (url.pathname === '/api/workers') {
             const hours = Math.min(24 * 30, Math.max(0.25, Number(url.searchParams.get('hours')) || DEFAULT_HOURS));
-            const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, workers: workers(hours) });
+            const body = JSON.stringify({ now: Date.now(), hours, stallMs: STALL_MS, limits: sessionLimits(), workers: workers(hours) });
             res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             return res.end(body);
         }
         if (url.pathname === '/api/orchestra/config') {
             let config = {
-                cwd: "D:\\OffHours",
+                cwd: homedir(),
                 coordinator: { tool: "opencode", model: "opencode/space-bunny-free", autoOpenTerminal: true },
                 workers: [
-                    { id: "1", tool: "opencode", model: "nim-1/z-ai/glm-5.3-flash", label: "NIM-Worker-1", prompt: "Hazır ol ve bekle." },
-                    { id: "2", tool: "opencode", model: "nim-2/z-ai/glm-5.3-flash", label: "NIM-Worker-2", prompt: "Hazır ol ve bekle." },
-                    { id: "3", tool: "opencode", model: "nim-3/z-ai/glm-5.3-flash", label: "NIM-Worker-3", prompt: "Hazır ol ve bekle." },
-                    { id: "4", tool: "agy", model: "", label: "AGY Worker", prompt: "Hazır ol ve bekle." },
-                    { id: "5", tool: "opencode", model: "openrouter/openrouter/free", label: "OpenRouter-Free", prompt: "Hazır ol ve bekle." }
+                    { id: "1", tool: "opencode", model: "nim-1/z-ai/glm-5.3-flash", label: "NIM-Worker-1", prompt: "Get ready and wait for a task." },
+                    { id: "2", tool: "opencode", model: "nim-2/z-ai/glm-5.3-flash", label: "NIM-Worker-2", prompt: "Get ready and wait for a task." },
+                    { id: "3", tool: "opencode", model: "nim-3/z-ai/glm-5.3-flash", label: "NIM-Worker-3", prompt: "Get ready and wait for a task." },
+                    { id: "4", tool: "agy", model: "", label: "AGY Worker", prompt: "Get ready and wait for a task." },
+                    { id: "5", tool: "opencode", model: "openrouter/openrouter/free", label: "OpenRouter-Free", prompt: "Get ready and wait for a task." }
                 ]
             };
             if (existsSync(TEAM_CONFIG_PATH)) {
@@ -426,7 +458,7 @@ createServer(async (req, res) => {
                     }
                     writeFileSync(OPENCODE_CONFIG_PATH, JSON.stringify(ocConfig, null, 4), 'utf8');
                 } catch (err) {
-                    console.error("Failed to update opencode.jsonc:", err);
+                    console.error(`Failed to update ${OPENCODE_CONFIG_PATH}:`, err);
                 }
             }
 
@@ -436,7 +468,7 @@ createServer(async (req, res) => {
         if (url.pathname === '/api/orchestra/launch-worker' && req.method === 'POST') {
             const body = await readBodyJson(req);
             const w = body.worker || {};
-            const cwd = body.cwd || "D:\\OffHours";
+            const cwd = body.cwd || homedir();
             try {
                 const resOpen = await callDaemon('/open', {
                     tool: w.tool,
@@ -454,7 +486,7 @@ createServer(async (req, res) => {
         }
         if (url.pathname === '/api/orchestra/open-terminal' && req.method === 'POST') {
             const body = await readBodyJson(req);
-            const cwd = body.cwd || "D:\\OffHours";
+            const cwd = body.cwd || homedir();
             const coordinator = body.coordinator || {};
             launchCoordinatorWindow(cwd, coordinator);
             res.writeHead(200, { 'content-type': 'application/json' });
@@ -462,7 +494,7 @@ createServer(async (req, res) => {
         }
         if (url.pathname === '/api/orchestra/launch' && req.method === 'POST') {
             const body = await readBodyJson(req);
-            const cwd = body.cwd || "D:\\OffHours";
+            const cwd = body.cwd || homedir();
             const workersList = body.workers || [];
 
             writeFileSync(TEAM_CONFIG_PATH, JSON.stringify({
@@ -503,6 +535,19 @@ createServer(async (req, res) => {
             }
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true, closedCount: live.length }));
+        }
+        // Code graph (graphify) for the team's project: the tree view graphify writes with
+        // `graphify tree`. Read-only; the project folder comes from team.json.
+        if (url.pathname === '/graph') {
+            let cwd = homedir();
+            try { cwd = JSON.parse(readFileSync(TEAM_CONFIG_PATH, 'utf8')).cwd || cwd; } catch { /* default */ }
+            const file = join(cwd, 'graphify-out', 'GRAPH_TREE.html');
+            if (!existsSync(file)) {
+                res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+                return res.end(`No code graph for ${cwd}.\nBuild one there with:\n  graphify update . --no-cluster && graphify tree --root .`);
+            }
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+            return res.end(readFileSync(file));
         }
         if (url.pathname === '/' || url.pathname === '/index.html') {
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
