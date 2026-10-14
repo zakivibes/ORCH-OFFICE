@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { toOpencodePermission, workerMcpConfig } from "../permissions/translate.js";
+import { toOpencodePermission, workerMcpConfig, workerEnvConfig } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import { resolveBinary } from "../core/bin.js";
@@ -96,7 +96,7 @@ export class OpencodeAdapter implements Adapter {
       process.stderr.write(`[opencode cfg] ${inline}\n`);
     }
 
-    const childEnv: NodeJS.ProcessEnv = { ...process.env, OPENCODE_CONFIG_CONTENT: inline };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...workerEnvConfig(), OPENCODE_CONFIG_CONTENT: inline };
     delete childEnv.OPENCODE_SERVER_PASSWORD;
     delete childEnv.OPENCODE_SERVER_USERNAME;
 

@@ -278,6 +278,7 @@ with `orch_stream`; `orch_send` answers "session busy" until the turn ends.
 | `ORCH_DEBUG` | — | verbose daemon logging |
 | `~/.orchestrator/config.json` | — | `{"workerShell": true}` opt-in for worker shell / full permissions |
 | `~/.orchestrator/config.json` → `workerMcp` | — | `{"disable": ["Blender"], "add": {...}}`: which MCP servers opencode workers get. Every enabled server's tool definitions ride along in **every** request, so switch off the ones workers never use (measured: 4 unused servers = 16k of a 49k-token baseline per step) |
+| `~/.orchestrator/config.json` → `workerEnv` | — | `{"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1"}`: extra environment for opencode workers. These two stop opencode listing every installed skill in each request (measured: ~3.5k tokens per step). Keep the project's `AGENTS.md` short too: opencode sends it with every request |
 | `~/.orchestrator/limits.json` | 250 steps / 60M tokens | per-turn step cap and per-session read-token budget, with per-model `overrides` (e.g. no budget for a free provider) |
 | `ORCH_DB` (office) | `~/.orchestrator/orch.db` | database the office reads |
 
