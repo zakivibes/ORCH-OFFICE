@@ -91,8 +91,9 @@ Switch to **📊 Dashboard** for live tracking and counting:
 - **Window**: count only who is on shift, or the last 1 h to 7 days. Pause freezes the view.
 - Deep links: `?view=dash&w=<session-id-prefix>&tab=files`.
 
-Token counts for opencode workers are read live from opencode's own ledger (every step, even mid-turn); agy
-reports per step and per turn. "Processed" includes cached input, which is the conversation re-read on every step
+Token counts and activity are read live from each tool's own records: opencode's database, and agy's per-step
+transcript (`~/.gemini/antigravity-cli/brain/<conversation>/…/transcript.jsonl`), so both update mid-turn,
+including what each Gemini step was thinking. "Processed" includes cached input, which is the conversation re-read on every step
 and dominates long agentic turns; "generated" is what the model actually wrote.
 
 ```bash

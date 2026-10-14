@@ -81,7 +81,7 @@
   .live .clock { font: 700 24px ui-monospace, Menlo, monospace; color: #3ddc84; }
   .kv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 6px; font-size: 12px; color: var(--dim); }
   .kv b { display: block; color: var(--ink); font-size: 15px; }
-  .feed .say b { color: #c9b6ff; } .feed .say { color: #cfcde8; }
+  .feed .say b { color: #c9b6ff; } .feed .think b { color: #ffb86b; } .feed .think { color: #b9b6d8; font-style: italic; } .feed .say { color: #cfcde8; }
   .files div { font: 12.5px ui-monospace, Menlo, monospace; padding: 3px 0; border-bottom: 1px dashed #2a2a44; word-break: break-all; }
   svg.spark { vertical-align: middle; }
 </style>
@@ -557,7 +557,7 @@ function usageBlock(w) {
   const rows = [['Fresh input', n(t.inputTokens)], ['Cached input', cached(t)], ['Output', n(t.outputTokens)], ['Thinking', n(t.thinkingTokens)]];
   return `<div class="utot"><b>${fmtTok(processed(t))}</b> processed · <b>${fmtTok(generated(t))}</b> generated${w.costUsd ? ` · $${w.costUsd.toFixed(4)}` : ''}</div>
     ${rows.map(([k, v]) => `<div class="urow"><span>${k}</span><i style="width:${(v / Math.max(1, ...rows.map((r) => r[1]))) * 100}%"></i><b title="${v.toLocaleString()}">${fmtTok(v)}</b></div>`).join('')}
-    <div class="hint" style="margin-top:4px">Source: ${w.usageSource === 'opencode' ? SRC.opencode : SRC[w.tool] || SRC.claude}</div>`;
+    <div class="hint" style="margin-top:4px">Source: ${w.usageSource === 'opencode' ? SRC.opencode : w.usageSource === 'agy-transcript' ? "live from agy's own step transcript (every step, updates mid-turn)" : SRC[w.tool] || SRC.claude}</div>`;
 }
 
 function liveBlock(w) {
@@ -601,10 +601,10 @@ function renderPanel() {
       <div class="hint" style="margin-top:10px">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
       ${w.state !== 'gone' ? `<div class="btns"><button onclick="cheer('${w.id}','praise')">👏 Praise</button><button onclick="cheer('${w.id}','coffee')">☕ Buy coffee</button></div>` : ''}`;
   } else if (ui.tab === 'activity') {
-    const kinds = { all: null, tool: ['tool'], say: ['say'], issues: ['error', 'perm'] };
+    const kinds = { all: null, tool: ['tool'], say: ['say'], think: ['think'], issues: ['error', 'perm'] };
     const f = kinds[ui.feed] ? w.feed.filter((e) => kinds[ui.feed].includes(e.kind)) : w.feed;
     body = `<div class="chips">${Object.keys(kinds).map((k) => `<button class="${ui.feed === k ? 'on' : ''}" onclick="ui.feed='${k}';saveUi();renderPanel()">${k}</button>`).join('')}</div>
-      <div class="feed">${f.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : e.kind === 'say' ? '💬 ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>`;
+      <div class="feed">${f.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : e.kind === 'say' ? '💬 ' : e.kind === 'think' ? '🧠 ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>`;
   } else if (ui.tab === 'turns') {
     body = `<table class="grid"><thead><tr><th>#</th><th>Started</th><th>Duration</th><th>Steps</th><th>Processed</th><th>Gen.</th><th class="l">Status</th></tr></thead><tbody>
       ${w.turnRows.slice().reverse().map((t) => `<tr title="${esc(t.prompt)}"><td>${t.n}</td><td>${ago(t.startedAt)}</td>

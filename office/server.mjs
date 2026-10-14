@@ -4,7 +4,7 @@
 // never writes to either.
 // Run: npm run office   then open http://localhost:4747  (ORCH_DB=<path> to read another db)
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -55,6 +55,44 @@ function opencodeUsage(oc, nativeId, from = 0, to = Number.MAX_SAFE_INTEGER) {
         },
         costUsd: Number(row.cost),
     };
+}
+
+// agy writes a full per-step transcript of each conversation to disk. Reading it gives Gemini
+// workers live tool calls, files and tokens even on an orch build that does not stream them.
+const AGY_DIRS = [join(homedir(), '.gemini', 'antigravity-cli', 'brain'), join(homedir(), '.gemini', 'antigravity', 'brain')];
+const agyCache = new Map();
+const unq = (v) => { if (typeof v !== 'string') return v; try { const j = JSON.parse(v); return typeof j === 'string' ? j : v; } catch { return v; } };
+function agyTranscript(nativeId) {
+    if (!nativeId) return null;
+    for (const dir of AGY_DIRS) {
+        const path = join(dir, nativeId, '.system_generated', 'logs', 'transcript.jsonl');
+        let st;
+        try { st = statSync(path); } catch { continue; }
+        const hit = agyCache.get(path);
+        if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.data;
+        const steps = [];
+        for (const line of readFileSync(path, 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let r; try { r = JSON.parse(line); } catch { continue; }
+            const at = Date.parse(r.created_at) || 0;
+            const tools = (r.tool_calls || []).map((t) => {
+                const a = Object.fromEntries(Object.entries(t.args || {}).map(([k, v]) => [k, unq(v)]));
+                const target = a.TargetFile ?? a.AbsolutePath ?? a.CommandLine ?? a.SearchPath ?? a.Query ?? a.Pattern ?? '';
+                return { name: String(t.name), detail: String(a.toolAction || target || '').replace(homedir(), '~').slice(0, 160),
+                         file: /replace_file_content|write_to_file|multi_replace_file_content|sed_file/.test(t.name) ? String(a.TargetFile ?? a.AbsolutePath ?? '').replace(homedir(), '~') : null };
+            });
+            steps.push({
+                at, type: r.type, tools,
+                usage: { inputTokens: Number(r.input_tokens || 0), outputTokens: Number(r.output_tokens || 0), cacheReadTokens: Number(r.cache_read_tokens || 0),
+                         cacheWriteTokens: 0, thinkingTokens: Number(r.thinking_tokens || 0) },
+                thought: r.type === 'PLANNER_RESPONSE' && r.thinking ? String(r.thinking).trim().split('\n').filter(Boolean)[0]?.slice(0, 220) : null,
+            });
+        }
+        const data = { steps, mtimeMs: st.mtimeMs };
+        agyCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, data });
+        return data;
+    }
+    return null;
 }
 
 function summariseInput(input) {
@@ -187,8 +225,43 @@ function worker(h, oc, s, now) {
         };
     }
 
+    let lastAt = events[events.length - 1]?.at ?? s.updated_at;
+    if (s.tool === 'agy') {
+        const tr = agyTranscript(s.native);
+        if (tr && tr.steps.length) {
+            usageSource = 'agy-transcript';
+            totals = tr.steps.reduce((a, st) => add(a, st.usage), ZERO());
+            for (const k of Object.keys(breakdown)) delete breakdown[k];
+            toolCalls = 0;
+            const tfeed = [];
+            for (const st of tr.steps) {
+                for (const t of st.tools) {
+                    breakdown[t.name] = (breakdown[t.name] || 0) + 1; toolCalls++;
+                    tfeed.push({ kind: 'tool', at: st.at, name: t.name, detail: t.detail });
+                    if (t.file) files.set(t.file, st.at);
+                }
+                if (st.thought) tfeed.push({ kind: 'think', at: st.at, name: 'thinking', detail: st.thought });
+            }
+            // merge with orch's own feed (said / errors / turn ends), newest last
+            const merged = [...feed.filter((f) => f.kind !== 'tool'), ...tfeed].sort((a, b) => a.at - b.at);
+            feed.length = 0; feed.push(...merged);
+            lastAt = Math.max(lastAt, tr.steps[tr.steps.length - 1].at);
+            for (const row of turnRows) {
+                const inTurn = tr.steps.filter((st) => st.at >= row.startedAt && st.at < (row.endedAt ?? Number.MAX_SAFE_INTEGER));
+                if (inTurn.length) { row.usage = inTurn.reduce((a, st) => add(a, st.usage), ZERO()); row.steps = inTurn.filter((st) => st.type === 'PLANNER_RESPONSE').length; }
+            }
+            if (current) {
+                const inTurn = tr.steps.filter((st) => st.at >= current.startedAt);
+                current.usage = inTurn.reduce((a, st) => add(a, st.usage), ZERO());
+                current.steps = inTurn.filter((st) => st.type === 'PLANNER_RESPONSE').length;
+                current.toolCalls = inTurn.reduce((a, st) => a + st.tools.length, 0);
+                current.source = 'agy-transcript';
+                const tok = Object.values(current.usage).reduce((a, b) => a + b, 0);
+                current.tokensPerMin = current.elapsedMs > 0 ? Math.round(tok / (current.elapsedMs / 60_000)) : 0;
+            }
+        }
+    }
     const lastEv = events[events.length - 1]?.ev;
-    const lastAt = events[events.length - 1]?.at ?? s.updated_at;
     let state = 'idle';
     if (s.closed_at) state = 'gone';
     else if (lastEv?.t === 'error') state = /rate/i.test(lastEv.kind + lastEv.message) ? 'ratelimited' : 'error';
