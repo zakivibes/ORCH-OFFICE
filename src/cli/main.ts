@@ -395,13 +395,13 @@ async function main() {
       if (openTerm && process.platform === "win32") {
         console.log(`🚀 Launching Coordinator terminal in ${cwd}...`);
         try {
-          const term = spawn("cmd.exe", ["/c", "start", "wt.exe", "-d", cwd, "opencode"], {
+          const term = spawn("cmd.exe", ["/c", "start", "wt.exe", "-d", cwd, "powershell.exe", "-NoExit", "-Command", "opencode"], {
             detached: true,
             stdio: "ignore",
           });
           term.unref();
         } catch {
-          const term = spawn("cmd.exe", ["/c", "start", "cmd.exe", "/k", `cd /d "${cwd}" && opencode`], {
+          const term = spawn("cmd.exe", ["/c", "start", "powershell.exe", "-NoExit", "-Command", `Set-Location '${cwd}'; opencode`], {
             detached: true,
             stdio: "ignore",
           });
