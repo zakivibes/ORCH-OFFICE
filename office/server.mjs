@@ -480,6 +480,19 @@ createServer(async (req, res) => {
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ ok: true, closedCount: live.length }));
         }
+        // Code graph (graphify) for the team's project: the tree view graphify writes with
+        // `graphify tree`. Read-only; the project folder comes from team.json.
+        if (url.pathname === '/graph') {
+            let cwd = homedir();
+            try { cwd = JSON.parse(readFileSync(TEAM_CONFIG_PATH, 'utf8')).cwd || cwd; } catch { /* default */ }
+            const file = join(cwd, 'graphify-out', 'GRAPH_TREE.html');
+            if (!existsSync(file)) {
+                res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+                return res.end(`No code graph for ${cwd}.\nBuild one there with:\n  graphify update . --no-cluster && graphify tree --root .`);
+            }
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+            return res.end(readFileSync(file));
+        }
         if (url.pathname === '/' || url.pathname === '/index.html') {
             res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             return res.end(html());

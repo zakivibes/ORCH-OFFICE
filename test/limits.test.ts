@@ -131,3 +131,25 @@ test("a normal turn under the limits is untouched", async () => {
   assert.equal(adapter.interrupted, 0);
   assert.ok(!events.some((e) => e.t === "error"));
 });
+
+test("workerMcp in config.json disables and adds MCP servers for opencode workers", async () => {
+  const { workerMcpConfig } = await import("../src/permissions/translate.js");
+  const home = mkdtempSync(join(tmpdir(), "orch-home-"));
+  const prev = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.equal(workerMcpConfig(), undefined, "no config file: nothing changes");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(home, ".orchestrator"));
+    writeFileSync(
+      join(home, ".orchestrator", "config.json"),
+      JSON.stringify({ workerMcp: { disable: ["Blender"], add: { graphify: { type: "local", command: ["graphify-mcp"] } } } }),
+    );
+    assert.deepEqual(workerMcpConfig(), {
+      Blender: { enabled: false },
+      graphify: { enabled: true, type: "local", command: ["graphify-mcp"] },
+    });
+  } finally {
+    process.env.HOME = prev;
+  }
+});

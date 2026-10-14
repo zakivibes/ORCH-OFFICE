@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { toOpencodePermission } from "../permissions/translate.js";
+import { toOpencodePermission, workerMcpConfig } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
 import { resolveBinary } from "../core/bin.js";
@@ -89,7 +89,8 @@ export class OpencodeAdapter implements Adapter {
 
     // opencode reads OPENCODE_CONFIG for inline config, so the translated
     // permission block is injected without touching the user's own file.
-    const inline = JSON.stringify({ ...toOpencodePermission(this.policy), $schema: undefined });
+    const mcp = workerMcpConfig();
+    const inline = JSON.stringify({ ...toOpencodePermission(this.policy), ...(mcp ? { mcp } : {}), $schema: undefined });
 
     if (process.env.ORCH_DEBUG) {
       process.stderr.write(`[opencode cfg] ${inline}\n`);

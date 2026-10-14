@@ -135,6 +135,13 @@ npm run office:demo     # preview with sample workers
 
 It opens `~/.orchestrator/orch.db` (and opencode's database, if present) read-only and never writes to either.
 
+### 🕸 Code graph (optional, graphify)
+With [graphify](https://github.com/Graphify-Labs/graphify) installed (`uv tool install graphifyy`),
+build an offline code graph in the project (`graphify update . --no-cluster && graphify tree --root .`)
+and the Office's **🕸 Graph** button opens it. Workers can query it from the shell
+(`graphify explain "Symbol"`, `graphify query "..." --budget 800`) instead of reading whole files;
+the CLI adds no per-step tokens, unlike registering its MCP server.
+
 ## 🧰 MCP tools
 
 | Tool | What it does |
@@ -270,6 +277,8 @@ with `orch_stream`; `orch_send` answers "session busy" until the turn ends.
 | `ORCH_EXTRA_ROOTS` | — | extra directories workers may touch |
 | `ORCH_DEBUG` | — | verbose daemon logging |
 | `~/.orchestrator/config.json` | — | `{"workerShell": true}` opt-in for worker shell / full permissions |
+| `~/.orchestrator/config.json` → `workerMcp` | — | `{"disable": ["Blender"], "add": {...}}`: which MCP servers opencode workers get. Every enabled server's tool definitions ride along in **every** request, so switch off the ones workers never use (measured: 4 unused servers = 16k of a 49k-token baseline per step) |
+| `~/.orchestrator/limits.json` | 250 steps / 60M tokens | per-turn step cap and per-session read-token budget, with per-model `overrides` (e.g. no budget for a free provider) |
 | `ORCH_DB` (office) | `~/.orchestrator/orch.db` | database the office reads |
 
 ## 🏗️ Architecture
