@@ -15,7 +15,7 @@ const MAX_INLINE_CHARS = 10_000;
 function roots(): { projectDir: string; rootList: string[] } {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const extra = (process.env.ORCH_EXTRA_ROOTS ?? "")
-    .split(":")
+    .split(process.platform === "win32" ? ";" : /[:;]/)
     .map((s) => s.trim())
     .filter(Boolean);
   return { projectDir, rootList: [projectDir, ...extra] };

@@ -1,9 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { addUsage, zeroUsage, type Event, type StoredEvent, type StoredSession, type StoredTurn, type ToolId, type Usage } from "./types.js";
 
-export const DEFAULT_DB = `${process.env.HOME}/.orchestrator/orch.db`;
+export const DEFAULT_DB = join(homedir(), ".orchestrator", "orch.db");
 
 export class Store {
   private db: DatabaseSync;

@@ -9,7 +9,7 @@
     "build": "tsc",
     "dev": "tsx src/cli/main.ts",
     "mcp": "tsx src/mcp/run.ts",
-    "test": "npm run build:test && node --test 'dist-test/test/*.test.js'",
+    "test": "npm run build:test && node --test \"dist-test/test/*.test.js\"",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build:test": "tsc -p tsconfig.test.json",
     "office": "node office/server.mjs",

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { toOpencodePermission } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
+import { resolveBinary } from "../core/bin.js";
 import {
   zeroUsage,
   addUsage,
@@ -51,7 +52,7 @@ export class OpencodeAdapter implements Adapter {
 
   constructor(
     private readonly policy: Policy,
-    private readonly binary = "opencode",
+    private readonly binary = resolveBinary("opencode"),
     /**
      * Default model. opencode's own configured default is whatever the user
      * set in opencode.json, which may point at a provider with no working
@@ -94,10 +95,16 @@ export class OpencodeAdapter implements Adapter {
       process.stderr.write(`[opencode cfg] ${inline}\n`);
     }
 
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, OPENCODE_CONFIG_CONTENT: inline };
+    delete childEnv.OPENCODE_SERVER_PASSWORD;
+    delete childEnv.OPENCODE_SERVER_USERNAME;
+
+    const isBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.binary);
     const server = spawn(this.binary, ["serve", "--port", String(port), "--hostname", "127.0.0.1"], {
       cwd: opts.cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, OPENCODE_CONFIG_CONTENT: inline },
+      shell: isBatch,
+      env: childEnv,
     }) as ChildProcessWithoutNullStreams;
 
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -115,6 +122,8 @@ export class OpencodeAdapter implements Adapter {
 
     server.stderr.setEncoding("utf8");
     server.stderr.on("data", (c: string) => entry.stderr.push(c));
+    server.stdout.setEncoding("utf8");
+    server.stdout.on("data", (c: string) => entry.stderr.push(c));
     server.on("exit", () => {
       entry.dead = true;
       entry.events.close();

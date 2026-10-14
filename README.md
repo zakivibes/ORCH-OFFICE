@@ -45,18 +45,51 @@ Turn 2 sees turn 1's context.
 **Requirements:** Node.js ≥ 22 (uses `node:sqlite`) and at least one worker CLI on your `PATH`
 (`claude`, `agy` and/or `opencode`), already logged in with its own providers.
 
+### 🍏 macOS / Linux
+
 ```bash
 git clone https://github.com/zakivibes/ORCH-OFFICE-.git orch-office
 cd orch-office
 npm install && npm run build
-npm test                                   # optional: 35 unit tests
+npm test                                   # optional: 36 unit tests
 
-# hand it to Claude Code
+# hand it to Claude Code / OpenCode
 claude mcp add --scope user orchestrator -- node "$PWD/dist/mcp/run.js"
 
 # optional: the terminal CLI
 ln -sf "$PWD/dist/cli/main.js" ~/.local/bin/orch
 ```
+
+### 🪟 Windows (10 / 11)
+
+```powershell
+git clone https://github.com/zakivibes/ORCH-OFFICE-.git orch-office
+cd orch-office
+npm install
+npm run build
+npm test                                   # 36 unit tests pass on Windows
+
+# Global CLI linking (PowerShell / CMD)
+npm link
+
+# Launch The Office Dashboard
+npm run office
+# or double-click start-office.bat
+```
+
+### 🚀 One-Click Orchestra (`orch up` / Web UI)
+
+You can launch a full multi-agent workforce in any directory with one command or click:
+
+```powershell
+# Launch all workers in your project directory & auto-open Coordinator CLI:
+orch up --cwd "D:\MyProject" --terminal
+
+# Shut down all live worker sessions:
+orch down
+```
+
+Or open `http://localhost:4747` and click **`[🚀 Orkestra Yönetimi]`** to dynamically customize workers, models, and working directories from the UI.
 
 Then just ask Claude Code something like:
 
@@ -91,9 +124,8 @@ Switch to **📊 Dashboard** for live tracking and counting:
 - **Window**: count only who is on shift, or the last 1 h to 7 days. Pause freezes the view.
 - Deep links: `?view=dash&w=<session-id-prefix>&tab=files`.
 
-Token counts and activity are read live from each tool's own records: opencode's database, and agy's per-step
-transcript (`~/.gemini/antigravity-cli/brain/<conversation>/…/transcript.jsonl`), so both update mid-turn,
-including what each Gemini step was thinking. "Processed" includes cached input, which is the conversation re-read on every step
+Token counts for opencode workers are read live from opencode's own ledger (every step, even mid-turn); agy
+reports per step and per turn. "Processed" includes cached input, which is the conversation re-read on every step
 and dominates long agentic turns; "generated" is what the model actually wrote.
 
 ```bash
