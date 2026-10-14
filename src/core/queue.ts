@@ -28,6 +28,13 @@ export class AsyncQueue<T> {
     return this.items.length;
   }
 
+  /** Drop everything buffered (not yet consumed); returns how many items were discarded. */
+  drain(): number {
+    const n = this.items.length;
+    this.items = [];
+    return n;
+  }
+
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return {
       next: (): Promise<IteratorResult<T>> => {

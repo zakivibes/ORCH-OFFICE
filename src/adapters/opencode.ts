@@ -255,6 +255,12 @@ export class OpencodeAdapter implements Adapter {
       }
     }
 
+    // The event queue is shared across turns. A turn that ended on an error or an abort can
+    // leave its trailing events (session.idle, session.error) buffered; the next turn would read
+    // that stale idle first and "complete" instantly with nothing done. Discard the leftovers.
+    entry.events.drain();
+    let sawActivity = false;
+
     // prompt_async so the SSE stream carries progress; we end on message.completed.
     void this.post(entry, `/session/${entry.sessionId}/prompt_async`, {
       method: "POST",
@@ -267,6 +273,10 @@ export class OpencodeAdapter implements Adapter {
         if (marker) { yield marker; continue; }
         const type = String(ev.type ?? "");
         const props = (ev.properties ?? {}) as Record<string, unknown>;
+
+        if (type === "message.updated" || type === "message.part.updated" || type === "message.part.delta") {
+          sawActivity = true;
+        }
 
         if (type === "message.part.updated" || type === "message.part.delta") {
           const part = (props.part ?? props.delta ?? {}) as Record<string, unknown>;
@@ -348,6 +358,10 @@ export class OpencodeAdapter implements Adapter {
           return;
         }
 
+        if ((type === "session.idle" || type === "message.completed.idle") && !sawActivity && Date.now() - startedAt < 3000) {
+          // A late idle from the previous turn, arriving before this turn did anything: ignore.
+          continue;
+        }
         if (type === "session.idle" || type === "message.completed.idle") {
           const flushed = coalescer.flush();
           if (flushed) yield { t: "text.delta", text: flushed };

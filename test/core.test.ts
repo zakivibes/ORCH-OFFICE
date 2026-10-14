@@ -174,6 +174,18 @@ test("agy: an empty failed turn reports the logged reason and its reset time", a
   assert.equal(parseResetIn("no reset here"), undefined);
 });
 
+test("AsyncQueue.drain discards buffered items so a new turn starts clean", async () => {
+  const { AsyncQueue } = await import("../src/core/queue.js");
+  const q = new AsyncQueue<string>();
+  q.push("stale-idle");
+  q.push("stale-error");
+  assert.equal(q.drain(), 2);
+  assert.equal(q.size, 0);
+  q.push("fresh");
+  const it = q[Symbol.asyncIterator]();
+  assert.deepEqual(await it.next(), { value: "fresh", done: false });
+});
+
 test("store round-trips sessions, turns and events", () => {
   const store = scratchDb();
   const id = "sess-1";
