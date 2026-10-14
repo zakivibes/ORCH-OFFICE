@@ -23,7 +23,10 @@ const STALL_MS = Number(process.env.ORCH_STALL_MINUTES ?? 10) * 60_000;
 
 const TEAM_CONFIG_PATH = join(homedir(), '.orchestrator', 'team.json');
 const DAEMON_PID_PATH = join(homedir(), '.orchestrator', 'daemon.json');
-const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.jsonc');
+// opencode accepts either name; use the one this machine actually has (.json first).
+const OPENCODE_CONFIG_PATH = ['opencode.json', 'opencode.jsonc']
+    .map((f) => join(homedir(), '.config', 'opencode', f))
+    .find((f) => existsSync(f)) ?? join(homedir(), '.config', 'opencode', 'opencode.json');
 
 function getDaemonPort() {
     try {
@@ -74,7 +77,7 @@ function launchCoordinatorWindow(cwd, coordinator) {
             const updated = raw.replace(/"model":\s*"[^"]*"/, `"model": "${coordModel}"`);
             writeFileSync(OPENCODE_CONFIG_PATH, updated, 'utf8');
         } catch (err) {
-            console.error('Failed to update coordinator model in opencode.jsonc:', err);
+            console.error(`Failed to update coordinator model in ${OPENCODE_CONFIG_PATH}:`, err);
         }
     }
 
@@ -399,7 +402,7 @@ createServer(async (req, res) => {
                     }
                     writeFileSync(OPENCODE_CONFIG_PATH, JSON.stringify(ocConfig, null, 4), 'utf8');
                 } catch (err) {
-                    console.error("Failed to update opencode.jsonc:", err);
+                    console.error(`Failed to update ${OPENCODE_CONFIG_PATH}:`, err);
                 }
             }
 

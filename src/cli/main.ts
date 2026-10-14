@@ -394,7 +394,10 @@ async function main() {
       const openTerm = flag("--terminal") || teamConfig.coordinator?.autoOpenTerminal;
       if (openTerm && process.platform === "win32") {
         const coordModel = teamConfig.coordinator?.model;
-        const ocConfigPath = join(homedir(), ".config", "opencode", "opencode.jsonc");
+        const ocConfigPath =
+          ["opencode.json", "opencode.jsonc"]
+            .map((f) => join(homedir(), ".config", "opencode", f))
+            .find((f) => existsSync(f)) ?? join(homedir(), ".config", "opencode", "opencode.json");
         if (coordModel && existsSync(ocConfigPath)) {
           try {
             const raw = readFileSync(ocConfigPath, "utf8");
