@@ -161,8 +161,10 @@ test("workerMcp in config.json disables and adds MCP servers for opencode worker
 test("workerEnv in config.json passes only well-formed variables to opencode workers", async () => {
   const { workerEnvConfig } = await import("../src/permissions/translate.js");
   const home = mkdtempSync(join(tmpdir(), "orch-home-"));
-  const prev = process.env.HOME;
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   try {
     assert.deepEqual(workerEnvConfig(), {}, "no config file: nothing added");
     const { mkdirSync } = await import("node:fs");
@@ -173,6 +175,8 @@ test("workerEnv in config.json passes only well-formed variables to opencode wor
     );
     assert.deepEqual(workerEnvConfig(), { OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1", N: "2" });
   } finally {
-    process.env.HOME = prev;
+    process.env.HOME = prevHome;
+    if (prevProfile !== undefined) process.env.USERPROFILE = prevProfile;
+    else delete process.env.USERPROFILE;
   }
 });
