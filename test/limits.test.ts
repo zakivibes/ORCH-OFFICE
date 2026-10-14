@@ -11,6 +11,9 @@ import { zeroUsage, type Adapter, type Event, type Handle, type Usage } from "..
 const dir = mkdtempSync(join(tmpdir(), "orch-limits-"));
 const limitsFile = join(dir, "limits.json");
 process.env.ORCH_LIMITS_FILE = limitsFile;
+// Keep the real ~/.orchestrator config (groups, caps, shifts) and quota file out of these tests.
+process.env.ORCH_CONFIG_FILE = join(dir, "no-config.json");
+process.env.ORCH_QUOTA_FILE = join(dir, "quota.json");
 
 function setLimits(l: Record<string, number>) {
   writeFileSync(limitsFile, JSON.stringify(l));

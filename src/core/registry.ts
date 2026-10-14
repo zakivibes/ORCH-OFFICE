@@ -16,6 +16,21 @@ import {
   type StoredSession,
   type ToolId,
 } from "./types.js";
+import {
+  matchGroup,
+  countLive,
+  isInShiftWindow,
+  shiftRefusalMessage,
+  startShiftTimer,
+  checkQuota,
+  recordQuotaError,
+  shiftStatus,
+  getGroups,
+  type ShiftStatusEntry,
+  type LiveSession,
+  __testTick,
+  isQuotaError,
+} from "./policy_rules.js";
 
 export interface OpenArgs {
   tool: ToolId;
@@ -44,14 +59,16 @@ export interface SendArgs {
  */
 export class Registry extends EventEmitter {
   readonly worktrees = new WorktreeManager();
-  private worktreeFor = new Map<string, Worktree>();
-  private adapters = new Map<string, Adapter>();
+  public worktreeFor = new Map<string, Worktree>();
+  public adapters = new Map<string, Adapter>();
   private policies = new Map<string, Policy>();
-  private handles = new Map<string, Handle>();
+  public handles = new Map<string, Handle>();
+  public sessionGroups = new Map<string, string>();
 
   constructor(readonly store: Store) {
     super();
     this.setMaxListeners(50);
+    startShiftTimer(this);
   }
 
   private build(tool: ToolId, policy: Policy): Adapter {
@@ -70,6 +87,29 @@ export class Registry extends EventEmitter {
   }
 
   async open(args: OpenArgs): Promise<{ handle: Handle; session: StoredSession; worktree: Worktree | null }> {
+    const group = matchGroup({ tool: args.tool, model: args.model });
+    if (group) {
+      const liveSessions: LiveSession[] = [];
+      const allSessions = this.store.listSessions(false);
+      for (const s of allSessions) {
+        const gm = matchGroup({ tool: s.tool, model: s.model });
+        if (gm?.name === group.name) {
+          liveSessions.push({ id: s.id, group: group.name, closedAt: s.closedAt });
+        }
+      }
+      const live = countLive(group.name, liveSessions);
+      if (live >= group.max) {
+        throw new Error(`group ${group.name} is full (${live}/${group.max} live)`);
+      }
+      if (group.shift && !isInShiftWindow(group)) {
+        throw new Error(shiftRefusalMessage(group));
+      }
+      const quota = checkQuota(group.name);
+      if (quota.blocked) {
+        throw new Error(quota.message!);
+      }
+    }
+
     // A worktree must exist before the agent spawns, because the agent's cwd
     // is the worktree. On failure we fall back to the shared checkout rather
     // than leaving the caller with nothing.
@@ -120,6 +160,7 @@ export class Registry extends EventEmitter {
     this.adapters.set(handle.id, adapter);
     this.policies.set(handle.id, policy);
     this.handles.set(handle.id, handle);
+    if (group) this.sessionGroups.set(handle.id, group.name);
     if (worktree) this.worktreeFor.set(handle.id, worktree);
     this.store.updateNative(handle.id, handle.native, handle.model);
 
@@ -171,8 +212,22 @@ export class Registry extends EventEmitter {
       return;
     }
 
-    // Limits are re-read every turn so ~/.orchestrator/limits.json can be tuned live.
     const stored = this.store.getSession(args.sessionId);
+    let groupName = this.sessionGroups.get(args.sessionId);
+    let group = groupName ? getGroups().find((g) => g.name === groupName) : null;
+    if (!group && stored) {
+      group = matchGroup({ tool: stored.tool, model: stored.model });
+    }
+    if (group?.shift && !isInShiftWindow(group)) {
+      yield {
+        t: "error",
+        kind: "budget",
+        message: shiftRefusalMessage(group),
+      };
+      return;
+    }
+
+    // Limits are re-read every turn so ~/.orchestrator/limits.json can be tuned live.
     const limits = loadLimits(stored?.model ?? handle.model);
     const sessionReadBefore = stored ? readTokens(stored.totals) : 0;
     if (limits.maxSessionReadTokens > 0 && sessionReadBefore >= limits.maxSessionReadTokens) {
@@ -209,6 +264,7 @@ export class Registry extends EventEmitter {
     let progress = zeroUsage();
     let steps = 0;
     let stopReason = "";
+    let lastError: Event | null = null;
 
     for await (const ev of adapter.send(handle, args.prompt, args.signal)) {
       this.store.appendEvent(args.sessionId, ev);
@@ -223,6 +279,7 @@ export class Registry extends EventEmitter {
         costUsd = ev.costUsd ?? 0;
         completed = true;
       }
+      if (ev.t === "error") lastError = ev;
 
       yield ev;
 
@@ -262,6 +319,13 @@ export class Registry extends EventEmitter {
     if (!completed) usage = readTokens(stepSum) >= readTokens(progress) ? stepSum : progress;
     this.store.endTurn(turnId, { usage, costUsd, aborted: !completed, resultText });
     this.store.accumulate(args.sessionId, usage, costUsd);
+
+    if (lastError && group) {
+      const isQuotaErr = lastError.kind === "rate_limit" || isQuotaError(lastError.message);
+      if (group.quota && isQuotaErr) {
+        recordQuotaError(group.name, lastError.message);
+      }
+    }
   }
 
   handleFor(id: string): Handle | null {
@@ -282,6 +346,7 @@ export class Registry extends EventEmitter {
     this.adapters.delete(sessionId);
     this.policies.delete(sessionId);
     this.handles.delete(sessionId);
+    this.sessionGroups.delete(sessionId);
   }
 
   async closeAll(): Promise<void> {
@@ -300,5 +365,17 @@ export class Registry extends EventEmitter {
 
   adapterFor(sessionId: string): Adapter | null {
     return this.adapters.get(sessionId) ?? null;
+  }
+
+  shiftStatus(): ShiftStatusEntry[] {
+    const liveSessions: LiveSession[] = [];
+    const allSessions = this.store.listSessions(false);
+    for (const s of allSessions) {
+      const group = matchGroup({ tool: s.tool, model: s.model });
+      if (group) {
+        liveSessions.push({ id: s.id, group: group.name, closedAt: s.closedAt });
+      }
+    }
+    return shiftStatus(liveSessions);
   }
 }

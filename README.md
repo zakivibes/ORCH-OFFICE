@@ -279,8 +279,41 @@ with `orch_stream`; `orch_send` answers "session busy" until the turn ends.
 | `~/.orchestrator/config.json` | — | `{"workerShell": true}` opt-in for worker shell / full permissions |
 | `~/.orchestrator/config.json` → `workerMcp` | — | `{"disable": ["Blender"], "add": {...}}`: which MCP servers opencode workers get. Every enabled server's tool definitions ride along in **every** request, so switch off the ones workers never use (measured: 4 unused servers = 16k of a 49k-token baseline per step) |
 | `~/.orchestrator/config.json` → `workerEnv` | — | `{"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1"}`: extra environment for opencode workers. These two stop opencode listing every installed skill in each request (measured: ~3.5k tokens per step). Keep the project's `AGENTS.md` short too: opencode sends it with every request |
+| `~/.orchestrator/config.json` → `groups` | — | **Shifts, caps & quota cool-downs** — opt-in groups with `match[]` (model substring), `tool` (exact), `max` (live sessions), `shift` window (`from`/`to`/`tz`/`graceMin`), `quota` flag |
 | `~/.orchestrator/limits.json` | 250 steps / 60M tokens | per-turn step cap and per-session read-token budget, with per-model `overrides` (e.g. no budget for a free provider) |
 | `ORCH_DB` (office) | `~/.orchestrator/orch.db` | database the office reads |
+| `ORCH_CONFIG_FILE` | — | override path to config.json (instead of `~/.orchestrator/config.json`) |
+
+### Groups (shifts, caps, quota)
+
+Opt-in: add a `groups` array to `~/.orchestrator/config.json` (or the file named by `ORCH_CONFIG_FILE`).
+The file is re-read when it changes, so no daemon restart is needed. Without `groups`, nothing changes.
+
+```json
+{
+  "groups": [
+    {"name": "alibaba", "match": ["alibaba-tp/"], "max": 4,
+     "shift": {"from": "22:00", "to": "08:00", "tz": "Asia/Shanghai", "graceMin": 5}},
+    {"name": "nvidia", "match": ["nvidia-"], "max": 4},
+    {"name": "opencode-free", "match": ["opencode/"], "max": 1, "quota": true},
+    {"name": "gemini", "tool": "agy", "max": 2, "quota": true}
+  ]
+}
+```
+
+A session belongs to the first group whose `tool` equals its tool (if given) and whose `match`
+has a substring of its model (if given).
+
+| Field | Meaning |
+|---|---|
+| `name` | group name, used in refusal messages and `quota.json` |
+| `match[]` / `tool` | model substrings / exact tool id (`claude`, `agy`, `opencode`); give at least one |
+| `max` | most **live** sessions at once; `orch_open` refuses the next one: `group alibaba is full (4/4 live)` |
+| `shift` | `from`/`to` local times in IANA `tz`; may cross midnight. Outside it `orch_open` refuses and `orch_send` returns an `error` of kind `budget`. A 60 s timer ends the shift: `graceMin` minutes (default 5) after `to` it writes `[orch shift] night shift ended — work so far is kept; this worker went home` to each live session of the group, interrupts it and closes it |
+| `quota` | when a turn ends with a `rate_limit` error, or an error whose text mentions quota / exhausted / usage limit / limit reached / insufficient credit / 429, the group cools down in `~/.orchestrator/quota.json` (`ORCH_QUOTA_FILE`) until the reset time in the message (`reset at 14:30`, `retry after 30 s`, `resets in 2h 15m`), else 5 h for an `agy`/gemini group and 1 h for others. While cooling down `orch_open` refuses: `gemini quota not renewed until …`. Delete the entry to lift it early |
+
+Group membership is worked out from each stored session's tool and model, so caps and shift ends
+still apply to sessions opened before a daemon restart.
 
 ## 🏗️ Architecture
 
