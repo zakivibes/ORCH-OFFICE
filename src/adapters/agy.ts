@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { toAgyFlags } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { readJsonLines, drain } from "./ndjson.js";
@@ -247,7 +250,16 @@ export class AgyAdapter implements Adapter {
           turns = Number(res.num_turns ?? 1);
           const status = String(res.status ?? "SUCCESS");
           if (status !== "SUCCESS") {
-            yield { t: "error", kind: "api", message: `agy ${status}: ${String(res.response ?? "")}` };
+            // agy often ends a failed turn with an empty response and puts the reason
+            // (e.g. "RESOURCE_EXHAUSTED ... Resets in 47m26s") only in its own log.
+            const detail = String(res.response ?? "").trim() || agyLastLoggedError(entry.stderr.join(""));
+            const quota = /RESOURCE_EXHAUSTED|quota|\b429\b|rate.?limit/i.test(detail);
+            yield {
+              t: "error",
+              kind: quota ? "rate_limit" : "api",
+              message: `agy ${status}: ${detail || "(no detail reported)"}`,
+              ...(quota ? { retryAfterMs: parseResetIn(detail) } : {}),
+            };
             return;
           }
           yield {
@@ -299,4 +311,34 @@ export class AgyAdapter implements Adapter {
   rootPid(id: string): number | null {
     return this.live.get(id)?.child.pid ?? null;
   }
+}
+/**
+ * The most recent error agy logged, for turns that fail with an empty response.
+ * Prefers the process's own stderr; falls back to the newest agy CLI log file.
+ */
+export function agyLastLoggedError(stderr: string, logDir = join(homedir(), ".gemini", "antigravity-cli", "log")): string {
+  const pick = (text: string) => {
+    const lines = text.split("\n").filter((l) => /^E\d{4} .*\] /.test(l) || /RESOURCE_EXHAUSTED|quota reached/i.test(l));
+    const last = lines[lines.length - 1];
+    return last ? last.replace(/^E\d{4} [\d:.]+\s+\d+ [\w.]+:\d+\] /, "").trim().slice(0, 400) : "";
+  };
+  const fromStderr = pick(stderr);
+  if (fromStderr) return fromStderr;
+  try {
+    const newest = readdirSync(logDir)
+      .filter((f) => f.endsWith(".log"))
+      .map((f) => ({ f, t: statSync(join(logDir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t)[0];
+    if (!newest || Date.now() - newest.t > 10 * 60_000) return "";
+    return pick(readFileSync(join(logDir, newest.f), "utf8").slice(-20_000));
+  } catch {
+    return "";
+  }
+}
+
+/** "Resets in 47m26s" / "1h2m" / "30s" -> milliseconds, if present. */
+export function parseResetIn(text: string): number | undefined {
+  const m = /resets? in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i.exec(text);
+  if (!m || !(m[1] || m[2] || m[3])) return undefined;
+  return ((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) * 1000;
 }
