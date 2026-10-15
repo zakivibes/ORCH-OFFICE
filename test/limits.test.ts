@@ -292,3 +292,19 @@ test("after a graphify call, grep and reads are free again", async () => {
   const { events } = await runScript(calls);
   assert.equal(events.at(-1)?.t, "turn.completed");
 });
+
+test("the graph-first rule is satisfied once per session, not every turn", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxExploreBeforeGraph: 2 });
+  let turn = 0;
+  const adapter = new ScriptAdapter([]);
+  (adapter as unknown as { send: () => AsyncGenerator<Event> }).send = async function* () {
+    turn += 1;
+    if (turn === 1) yield { t: "tool.call", id: "g", name: "bash", input: { command: "graphify query \"x\"" } };
+    for (let i = 0; i < 5; i++) yield { t: "tool.call", id: `${turn}-${i}`, name: "read", input: { filePath: `/t${turn}/${i}.js` } };
+    yield { t: "turn.completed", usage: zeroUsage(), durationMs: 1, turns: 1 };
+  };
+  const reg = registryWith(adapter);
+  const { handle } = await reg.open({ tool: "opencode", cwd: dir, roots: [dir] });
+  assert.equal((await run(reg, handle.id)).at(-1)?.t, "turn.completed");
+  assert.equal((await run(reg, handle.id)).at(-1)?.t, "turn.completed", "second turn needs no new graphify call");
+});

@@ -13,7 +13,7 @@ import type { Limits } from "./limits.js";
  *   - more than `maxTestRuns` test runs in a row with no file changed in between: re-running
  *     unchanged code will not fix a failing test (fix-then-run cycles are progress and reset it);
  *   - the same file read more than `maxSameFileReads` times;
- *   - more than `maxExploreBeforeGraph` grep/read calls before the turn's first `graphify` call:
+ *   - more than `maxExploreBeforeGraph` grep/read calls before the session's first `graphify` call:
  *     exploring by hand re-sends the whole context per step, the code graph answers in one;
  *   - past `maxTurnSteps`, a turn may continue only while it is still editing (an edit within
  *     the last `stepGraceAfterEdit` calls), up to `maxTurnSteps * hardStepMultiplier`.
@@ -60,7 +60,15 @@ export class LoopGuard {
   private readonly seen = new Map<string, number>();
   private readonly fileReads = new Map<string, number>();
 
-  constructor(private readonly limits: Limits) {}
+  /** `graphAlreadyUsed`: the session called graphify in an earlier turn (the rule is per session). */
+  constructor(private readonly limits: Limits, graphAlreadyUsed = false) {
+    this.graphUsed = graphAlreadyUsed;
+  }
+
+  /** Whether this session has called graphify (this turn or an earlier one). */
+  get usedGraph(): boolean {
+    return this.graphUsed;
+  }
 
   get stepCount(): number {
     return this.steps;

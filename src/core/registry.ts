@@ -65,6 +65,8 @@ export class Registry extends EventEmitter {
   private policies = new Map<string, Policy>();
   public handles = new Map<string, Handle>();
   public sessionGroups = new Map<string, string>();
+  /** Sessions that have called graphify, so the graph-first rule asks for it once per session. */
+  private graphSessions = new Set<string>();
 
   constructor(readonly store: Store) {
     super();
@@ -263,7 +265,7 @@ export class Registry extends EventEmitter {
     // per-step deltas (usage.step), opencode a running total (usage.progress).
     let stepSum = zeroUsage();
     let progress = zeroUsage();
-    const guard = new LoopGuard(limits);
+    const guard = new LoopGuard(limits, this.graphSessions.has(args.sessionId));
     let stopReason = "";
     let lastError: Event | null = null;
 
@@ -314,6 +316,8 @@ export class Registry extends EventEmitter {
         break;
       }
     }
+
+    if (guard.usedGraph) this.graphSessions.add(args.sessionId);
 
     // A turn that never completed (stopped, errored, aborted) still consumed tokens: record what
     // was seen so the session totals and the budget stay honest.
