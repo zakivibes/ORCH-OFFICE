@@ -10,8 +10,8 @@ import type { Limits } from "./limits.js";
  * by what they repeat:
  *
  *   - the identical call (tool + input) made more than `maxRepeatCalls` times;
- *   - more than `maxTestRuns` test runs in one turn: the tests are failing and retrying will not
- *     fix them;
+ *   - more than `maxTestRuns` test runs in a row with no file changed in between: re-running
+ *     unchanged code will not fix a failing test (fix-then-run cycles are progress and reset it);
  *   - the same file read more than `maxSameFileReads` times;
  *   - more than `maxExploreBeforeGraph` grep/read calls before the turn's first `graphify` call:
  *     exploring by hand re-sends the whole context per step, the code graph answers in one;
@@ -24,6 +24,8 @@ import type { Limits } from "./limits.js";
 const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool"]);
 const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
 const READ_TOOLS = new Set(["read", "view"]);
+/** A shell command that writes a file: heredoc/redirect, sed -i, or a script that opens a file for writing. */
+const SHELL_WRITE = /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi|open\([^)]*['"]w['"]|\.write(_text)?\(|writeFileSync/;
 const EXPLORE_TOOLS = new Set(["read", "view", "grep", "glob", "list", "ls"]);
 const EXPLORE_CMD = /^\s*(cd [^;&]+(&&|;)\s*)?(rtk )?(grep|rg|sed -n|cat|head|tail|find|ls|wc)\b/;
 const GRAPH_CMD = /\bgraphify (explain|query|path)\b/;
@@ -52,6 +54,7 @@ export class LoopGuard {
   private steps = 0;
   private lastEditStep = 0;
   private testRuns = 0;
+  private lastTestStep = 0;
   private graphUsed = false;
   private exploreBeforeGraph = 0;
   private readonly seen = new Map<string, number>();
@@ -70,7 +73,8 @@ export class LoopGuard {
     const tool = name.toLowerCase();
     const cmd = commandOf(input);
 
-    if (EDIT_TOOLS.has(tool) || /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi/.test(cmd)) this.lastEditStep = this.steps;
+    const edited = EDIT_TOOLS.has(tool) || SHELL_WRITE.test(cmd);
+    if (edited) this.lastEditStep = this.steps;
 
     if (GRAPH_CMD.test(cmd)) this.graphUsed = true;
     if (!this.graphUsed && l.maxExploreBeforeGraph > 0 && (EXPLORE_TOOLS.has(tool) || EXPLORE_CMD.test(cmd))) {
@@ -92,10 +96,13 @@ export class LoopGuard {
       }
     }
 
+    // Only a re-run with nothing changed since the last run counts: fix-then-run cycles are progress.
     if (cmd && TEST_CMD.test(cmd) && l.maxTestRuns > 0) {
+      if (edited || this.lastEditStep > this.lastTestStep) this.testRuns = 0;
+      this.lastTestStep = this.steps;
       this.testRuns += 1;
       if (this.testRuns > l.maxTestRuns) {
-        return `tests were run ${this.testRuns} times in one turn (limit ${l.maxTestRuns}); they keep failing. ` +
+        return `tests were re-run ${this.testRuns} times with no file changed in between (limit ${l.maxTestRuns}); ` +
           `Report the failing test and its error instead of re-running`;
       }
     }

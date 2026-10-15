@@ -231,7 +231,18 @@ test("re-running tests past maxTestRuns is stopped with a report-instead hint", 
   }));
   const { events } = await runScript(calls);
   const stop = events.at(-1);
-  assert.ok(stop?.t === "error" && /tests were run 4 times/.test(stop.message) && /Report the failing test/.test(stop.message));
+  assert.ok(stop?.t === "error" && /tests were re-run 4 times/.test(stop.message) && /Report the failing test/.test(stop.message));
+});
+
+test("fix-then-run cycles do not count as test retries", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxTestRuns: 2, maxRepeatCalls: 0 });
+  // A script that edits the test file and runs it, ten times: each run follows a change.
+  const calls = Array.from({ length: 10 }, (_, i) => ({
+    name: "bash",
+    input: { command: `cd backend && python3 - <<'EOF'\nopen('tests/a.test.js','w').write('${i}')\nEOF\nnode tests/a.test.js` },
+  }));
+  const { events } = await runScript(calls);
+  assert.equal(events.at(-1)?.t, "turn.completed");
 });
 
 test("reading one file past maxSameFileReads is stopped", async () => {
