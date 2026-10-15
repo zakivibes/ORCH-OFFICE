@@ -123,7 +123,8 @@ function localNowInTz(now: Date, tz: string): { hour: number; minute: number; no
   const localDate = new Date();
   localDate.setUTCFullYear(parts.year, parts.month - 1, parts.day);
   localDate.setUTCHours(parts.hour, parts.minute, 0, 0);
-  const offsetMs = localDate.getTime() - now.getTime();
+  // Zone offsets are whole minutes; rounding drops the seconds of "now" from the offset.
+  const offsetMs = Math.round((localDate.getTime() - now.getTime()) / 60_000) * 60_000;
   return { hour: parts.hour, minute: parts.minute, nowMin: toMinutes(parts.hour, parts.minute), localDate, offsetMs };
 }
 
