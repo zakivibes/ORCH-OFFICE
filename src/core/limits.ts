@@ -21,6 +21,7 @@ import type { Usage } from "./types.js";
  *     "maxRepeatCalls": 6,            // identical calls in one turn (loopGuard.ts)
  *     "maxTestRuns": 12,              // test runs in one turn
  *     "maxSameFileReads": 30,         // reads of one file in one turn
+ *     "maxExploreBeforeGraph": 8,     // grep/read calls before the first graphify call (0 = off)
  *     "stepGraceAfterEdit": 40,       // past maxTurnSteps, keep going while an edit is this recent...
  *     "hardStepMultiplier": 2,        // ...up to maxTurnSteps x this
  *     "overrides": [                  // per model, first match wins (substring of "provider/model")
@@ -42,6 +43,8 @@ export interface Limits {
   maxTestRuns: number;
   /** Reads of the same file allowed in one turn. */
   maxSameFileReads: number;
+  /** grep/read calls allowed before the turn's first graphify call (0 = off). */
+  maxExploreBeforeGraph: number;
   /** Past maxTurnSteps, a turn that edited a file within this many calls may continue... */
   stepGraceAfterEdit: number;
   /** ...up to maxTurnSteps times this. */
@@ -56,6 +59,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxRepeatCalls: 6,
   maxTestRuns: 12,
   maxSameFileReads: 30,
+  maxExploreBeforeGraph: 8,
   stepGraceAfterEdit: 40,
   hardStepMultiplier: 2,
 };
@@ -91,6 +95,7 @@ export function loadLimits(model = ""): Limits {
     maxRepeatCalls: num(file.maxRepeatCalls) ?? DEFAULT_LIMITS.maxRepeatCalls,
     maxTestRuns: num(file.maxTestRuns) ?? DEFAULT_LIMITS.maxTestRuns,
     maxSameFileReads: num(file.maxSameFileReads) ?? DEFAULT_LIMITS.maxSameFileReads,
+    maxExploreBeforeGraph: num(file.maxExploreBeforeGraph) ?? DEFAULT_LIMITS.maxExploreBeforeGraph,
     stepGraceAfterEdit: num(file.stepGraceAfterEdit) ?? DEFAULT_LIMITS.stepGraceAfterEdit,
     hardStepMultiplier: num(file.hardStepMultiplier) ?? DEFAULT_LIMITS.hardStepMultiplier,
   };

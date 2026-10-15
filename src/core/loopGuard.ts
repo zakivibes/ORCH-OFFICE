@@ -13,6 +13,8 @@ import type { Limits } from "./limits.js";
  *   - more than `maxTestRuns` test runs in one turn: the tests are failing and retrying will not
  *     fix them;
  *   - the same file read more than `maxSameFileReads` times;
+ *   - more than `maxExploreBeforeGraph` grep/read calls before the turn's first `graphify` call:
+ *     exploring by hand re-sends the whole context per step, the code graph answers in one;
  *   - past `maxTurnSteps`, a turn may continue only while it is still editing (an edit within
  *     the last `stepGraceAfterEdit` calls), up to `maxTurnSteps * hardStepMultiplier`.
  *
@@ -22,6 +24,9 @@ import type { Limits } from "./limits.js";
 const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool"]);
 const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
 const READ_TOOLS = new Set(["read", "view"]);
+const EXPLORE_TOOLS = new Set(["read", "view", "grep", "glob", "list", "ls"]);
+const EXPLORE_CMD = /^\s*(cd [^;&]+(&&|;)\s*)?(rtk )?(grep|rg|sed -n|cat|head|tail|find|ls|wc)\b/;
+const GRAPH_CMD = /\bgraphify (explain|query|path)\b/;
 
 function commandOf(input: unknown): string {
   if (!input || typeof input !== "object") return "";
@@ -47,6 +52,8 @@ export class LoopGuard {
   private steps = 0;
   private lastEditStep = 0;
   private testRuns = 0;
+  private graphUsed = false;
+  private exploreBeforeGraph = 0;
   private readonly seen = new Map<string, number>();
   private readonly fileReads = new Map<string, number>();
 
@@ -64,6 +71,16 @@ export class LoopGuard {
     const cmd = commandOf(input);
 
     if (EDIT_TOOLS.has(tool) || /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi/.test(cmd)) this.lastEditStep = this.steps;
+
+    if (GRAPH_CMD.test(cmd)) this.graphUsed = true;
+    if (!this.graphUsed && l.maxExploreBeforeGraph > 0 && (EXPLORE_TOOLS.has(tool) || EXPLORE_CMD.test(cmd))) {
+      this.exploreBeforeGraph += 1;
+      if (this.exploreBeforeGraph > l.maxExploreBeforeGraph) {
+        return `${this.exploreBeforeGraph} grep/read calls before any graphify call (limit ${l.maxExploreBeforeGraph}). ` +
+          `Graph first: graphify explain "file::symbol" (or graphify query "...") gives exact file:line in one step; ` +
+          `then read only those lines`;
+      }
+    }
 
     const sig = signature(tool, input);
     if (sig && l.maxRepeatCalls > 0) {

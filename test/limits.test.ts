@@ -16,7 +16,8 @@ process.env.ORCH_CONFIG_FILE = join(dir, "no-config.json");
 process.env.ORCH_QUOTA_FILE = join(dir, "quota.json");
 
 function setLimits(l: Record<string, number>) {
-  writeFileSync(limitsFile, JSON.stringify(l));
+  // The graph-first rule is tested on its own; elsewhere it would trip first on the scripted reads.
+  writeFileSync(limitsFile, JSON.stringify({ maxExploreBeforeGraph: 0, ...l }));
 }
 
 const caps = {
@@ -73,7 +74,7 @@ async function run(reg: Registry, sessionId: string): Promise<Event[]> {
 }
 
 test("limits fall back to defaults and accept overrides from the file", () => {
-  setLimits({});
+  writeFileSync(limitsFile, "{}");
   assert.deepEqual(loadLimits(), DEFAULT_LIMITS);
   setLimits({ maxTurnSteps: 7, maxSessionReadTokens: 0 });
   const l = loadLimits();
@@ -261,4 +262,22 @@ test("past maxTurnSteps with no recent edit the turn is stopped", async () => {
   const { events } = await runScript(calls);
   const stop = events.at(-1);
   assert.ok(stop?.t === "error" && /turn stopped after 11 tool calls/.test(stop.message) && /no file edited/.test(stop.message));
+});
+
+test("exploring past maxExploreBeforeGraph without a graphify call is stopped", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxExploreBeforeGraph: 3 });
+  const calls = Array.from({ length: 6 }, (_, i) => ({ name: "bash", input: { command: `rtk grep -n 'x${i}' lib` } }));
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && /4 grep\/read calls before any graphify call/.test(stop.message) && /graphify explain/.test(stop.message));
+});
+
+test("after a graphify call, grep and reads are free again", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxExploreBeforeGraph: 2 });
+  const calls = [
+    { name: "bash", input: { command: "cd /repo && graphify explain \"giftController.js::.send()\"" } },
+    ...Array.from({ length: 10 }, (_, i) => ({ name: "read", input: { filePath: `/f${i}.js` } })),
+  ];
+  const { events } = await runScript(calls);
+  assert.equal(events.at(-1)?.t, "turn.completed");
 });
