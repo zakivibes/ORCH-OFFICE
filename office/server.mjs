@@ -27,6 +27,7 @@ const DAEMON_PID_PATH = join(homedir(), '.orchestrator', 'daemon.json');
 const OPENCODE_CONFIG_PATH = ['opencode.json', 'opencode.jsonc']
     .map((f) => join(homedir(), '.config', 'opencode', f))
     .find((f) => existsSync(f)) ?? join(homedir(), '.config', 'opencode', 'opencode.json');
+const DAEMON_ENTRY_PATH = join(HERE, '..', 'dist', 'core', 'daemon-entry.js');
 
 let openCodeProviderNames = {};
 try {
@@ -50,8 +51,41 @@ function getDaemonPort() {
     return 47811;
 }
 
-async function callDaemon(route, body = {}) {
+async function isDaemonAlive(port) {
+    try {
+        const r = await fetch(`http://127.0.0.1:${port}/ping`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(1000)
+        });
+        return r.ok;
+    } catch {
+        return false;
+    }
+}
+
+async function ensureDaemon() {
     const port = getDaemonPort();
+    if (await isDaemonAlive(port)) return port;
+
+    if (existsSync(DAEMON_ENTRY_PATH)) {
+        console.log('Orchestrator daemon baslatiliyor...');
+        const child = spawn(process.execPath, [DAEMON_ENTRY_PATH], {
+            detached: true,
+            stdio: 'ignore'
+        });
+        child.unref();
+
+        for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 150));
+            const p = getDaemonPort();
+            if (await isDaemonAlive(p)) return p;
+        }
+    }
+    return port;
+}
+
+async function callDaemon(route, body = {}) {
+    const port = await ensureDaemon();
     const r = await fetch(`http://127.0.0.1:${port}${route}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -81,28 +115,50 @@ function readBodyJson(req) {
 
 function launchCoordinatorWindow(cwd, coordinator) {
     if (process.platform !== 'win32') return;
-    const coordModel = coordinator?.model;
+    const tool = (coordinator?.tool || 'opencode').toLowerCase();
+    const coordModel = (coordinator?.model || '').trim();
 
-    if (coordModel && existsSync(OPENCODE_CONFIG_PATH)) {
-        try {
-            const raw = readFileSync(OPENCODE_CONFIG_PATH, 'utf8');
-            const updated = raw.replace(/"model":\s*"[^"]*"/, `"model": "${coordModel}"`);
-            writeFileSync(OPENCODE_CONFIG_PATH, updated, 'utf8');
-        } catch (err) {
-            console.error(`Failed to update coordinator model in ${OPENCODE_CONFIG_PATH}:`, err);
+    let title = 'ORCH Coordinator';
+    let execCmd = 'call opencode';
+
+    if (tool === 'claude') {
+        title = 'ORCH Coordinator - Claude Code';
+        if (coordModel && coordModel !== 'default' && coordModel !== 'sonnet') {
+            execCmd = `call claude --model ${coordModel}`;
+        } else {
+            execCmd = 'call claude';
         }
+    } else if (tool === 'agy') {
+        title = 'ORCH Coordinator - AGY';
+        if (coordModel && coordModel !== 'default') {
+            execCmd = `call agy --model ${coordModel}`;
+        } else {
+            execCmd = 'call agy';
+        }
+    } else {
+        title = 'ORCH Coordinator - OpenCode';
+        if (coordModel && existsSync(OPENCODE_CONFIG_PATH)) {
+            try {
+                const raw = readFileSync(OPENCODE_CONFIG_PATH, 'utf8');
+                const updated = raw.replace(/"model":\s*"[^"]*"/, `"model": "${coordModel}"`);
+                writeFileSync(OPENCODE_CONFIG_PATH, updated, 'utf8');
+            } catch (err) {
+                console.error('Failed to update coordinator model in opencode.jsonc:', err);
+            }
+        }
+        execCmd = 'call opencode';
     }
 
     const batPath = join(homedir(), '.orchestrator', 'run-coordinator.bat');
     const content = [
         '@echo off',
         `cd /d "${cwd}"`,
-        'title ORCH Coordinator - OpenCode',
+        `title ${title}`,
         'echo ====================================================',
-        'echo        ORCH OFFICE - Lead Coordinator CLI',
+        `echo        ORCH OFFICE - Lead Coordinator CLI (${tool.toUpperCase()})`,
         'echo ====================================================',
         'echo.',
-        'opencode',
+        execCmd,
         'cmd /k'
     ].join('\r\n');
     writeFileSync(batPath, content, 'utf8');
