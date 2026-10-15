@@ -183,3 +183,82 @@ test("workerEnv in config.json passes only well-formed variables to opencode wor
     else delete process.env.USERPROFILE;
   }
 });
+
+/** Plays back a fixed list of tool calls, then completes. */
+class ScriptAdapter implements Adapter {
+  readonly id = "opencode" as const;
+  readonly caps = caps;
+  interrupted = 0;
+  constructor(private calls: { name: string; input: Record<string, unknown> }[]) {}
+  async spawn(): Promise<Handle> {
+    return { tool: "opencode", id: `s-${Math.random()}`, native: "n", cwd: dir, model: "fake", caps };
+  }
+  async *send(): AsyncGenerator<Event> {
+    for (const [i, c] of this.calls.entries()) {
+      if (this.interrupted) return;
+      yield { t: "tool.call", id: String(i), name: c.name, input: c.input };
+    }
+    yield { t: "turn.completed", usage: zeroUsage(), durationMs: 1, turns: 1 };
+  }
+  async interrupt() {
+    this.interrupted += 1;
+  }
+  async close() {}
+}
+
+async function runScript(calls: { name: string; input: Record<string, unknown> }[]) {
+  const adapter = new ScriptAdapter(calls);
+  const reg = registryWith(adapter);
+  const { handle } = await reg.open({ tool: "opencode", cwd: dir, roots: [dir] });
+  return { events: await run(reg, handle.id), adapter };
+}
+
+test("the same call repeated past maxRepeatCalls is stopped", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxRepeatCalls: 3 });
+  const same = { name: "bash", input: { command: "grep -n foo x.dart", description: "varies" } };
+  const { events, adapter } = await runScript(Array(10).fill(same));
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && stop.kind === "budget" && /same bash call was made 4 times/.test(stop.message));
+  assert.equal(adapter.interrupted, 1);
+});
+
+test("re-running tests past maxTestRuns is stopped with a report-instead hint", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxTestRuns: 3, maxRepeatCalls: 0 });
+  const calls = Array.from({ length: 8 }, (_, i) => ({
+    name: "bash",
+    input: { command: `cd backend && node tests/a_${i}.test.js` },
+  }));
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && /tests were run 4 times/.test(stop.message) && /Report the failing test/.test(stop.message));
+});
+
+test("reading one file past maxSameFileReads is stopped", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxSameFileReads: 2 });
+  const calls = Array.from({ length: 5 }, (_, i) => ({ name: "read", input: { filePath: "/big.js", offset: i * 50 } }));
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && /\/big\.js was read 3 times/.test(stop.message));
+});
+
+test("a turn still editing may run past maxTurnSteps up to the hard ceiling", async () => {
+  setLimits({ maxTurnSteps: 10, maxSessionReadTokens: 0, stepGraceAfterEdit: 5, hardStepMultiplier: 2 });
+  // An edit every 4 calls: never more than 5 calls since the last edit.
+  const calls = Array.from({ length: 30 }, (_, i) =>
+    i % 4 === 0 ? { name: "edit", input: { filePath: `/f${i}.ts` } } : { name: "grep", input: { pattern: `p${i}` } },
+  );
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && /turn stopped after 21 tool calls/.test(stop.message) && /hard ceiling 20/.test(stop.message));
+});
+
+test("past maxTurnSteps with no recent edit the turn is stopped", async () => {
+  setLimits({ maxTurnSteps: 10, maxSessionReadTokens: 0, stepGraceAfterEdit: 3, hardStepMultiplier: 3 });
+  const calls = [
+    { name: "edit", input: { filePath: "/a.ts" } },
+    ...Array.from({ length: 20 }, (_, i) => ({ name: "grep", input: { pattern: `q${i}` } })),
+  ];
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(stop?.t === "error" && /turn stopped after 11 tool calls/.test(stop.message) && /no file edited/.test(stop.message));
+});

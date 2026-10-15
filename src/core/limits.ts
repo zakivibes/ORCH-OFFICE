@@ -18,6 +18,11 @@ import type { Usage } from "./types.js";
  *     "maxTurnReadTokens": 0,         // tokens read (input + cache read) in one turn
  *     "maxSessionReadTokens": 60000000, // tokens read over the session's whole life
  *     "warnAtFraction": 0.8,          // warn once the session passes this share of its budget
+ *     "maxRepeatCalls": 6,            // identical calls in one turn (loopGuard.ts)
+ *     "maxTestRuns": 12,              // test runs in one turn
+ *     "maxSameFileReads": 30,         // reads of one file in one turn
+ *     "stepGraceAfterEdit": 40,       // past maxTurnSteps, keep going while an edit is this recent...
+ *     "hardStepMultiplier": 2,        // ...up to maxTurnSteps x this
  *     "overrides": [                  // per model, first match wins (substring of "provider/model")
  *       { "match": "nvidia-", "maxSessionReadTokens": 0 }   // e.g. free models: no token budget
  *     ]
@@ -31,6 +36,16 @@ export interface Limits {
   maxTurnReadTokens: number;
   maxSessionReadTokens: number;
   warnAtFraction: number;
+  /** Identical calls (same tool, same input) allowed in one turn (see loopGuard.ts). */
+  maxRepeatCalls: number;
+  /** Test runs allowed in one turn. */
+  maxTestRuns: number;
+  /** Reads of the same file allowed in one turn. */
+  maxSameFileReads: number;
+  /** Past maxTurnSteps, a turn that edited a file within this many calls may continue... */
+  stepGraceAfterEdit: number;
+  /** ...up to maxTurnSteps times this. */
+  hardStepMultiplier: number;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -38,6 +53,11 @@ export const DEFAULT_LIMITS: Limits = {
   maxTurnReadTokens: 0,
   maxSessionReadTokens: 60_000_000,
   warnAtFraction: 0.8,
+  maxRepeatCalls: 6,
+  maxTestRuns: 12,
+  maxSameFileReads: 30,
+  stepGraceAfterEdit: 40,
+  hardStepMultiplier: 2,
 };
 
 export function limitsPath(): string {
@@ -68,6 +88,11 @@ export function loadLimits(model = ""): Limits {
     maxSessionReadTokens:
       num(file.maxSessionReadTokens) ?? num(env.ORCH_MAX_SESSION_READ_TOKENS) ?? DEFAULT_LIMITS.maxSessionReadTokens,
     warnAtFraction: num(file.warnAtFraction) ?? DEFAULT_LIMITS.warnAtFraction,
+    maxRepeatCalls: num(file.maxRepeatCalls) ?? DEFAULT_LIMITS.maxRepeatCalls,
+    maxTestRuns: num(file.maxTestRuns) ?? DEFAULT_LIMITS.maxTestRuns,
+    maxSameFileReads: num(file.maxSameFileReads) ?? DEFAULT_LIMITS.maxSameFileReads,
+    stepGraceAfterEdit: num(file.stepGraceAfterEdit) ?? DEFAULT_LIMITS.stepGraceAfterEdit,
+    hardStepMultiplier: num(file.hardStepMultiplier) ?? DEFAULT_LIMITS.hardStepMultiplier,
   };
 }
 

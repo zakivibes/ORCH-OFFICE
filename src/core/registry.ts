@@ -7,6 +7,7 @@ import { ClaudeAdapter } from "../adapters/claude.js";
 import { AgyAdapter } from "../adapters/agy.js";
 import { OpencodeAdapter } from "../adapters/opencode.js";
 import { fmtTokens, loadLimits, readTokens } from "./limits.js";
+import { LoopGuard } from "./loopGuard.js";
 import {
   addUsage,
   zeroUsage,
@@ -262,7 +263,7 @@ export class Registry extends EventEmitter {
     // per-step deltas (usage.step), opencode a running total (usage.progress).
     let stepSum = zeroUsage();
     let progress = zeroUsage();
-    let steps = 0;
+    const guard = new LoopGuard(limits);
     let stopReason = "";
     let lastError: Event | null = null;
 
@@ -271,7 +272,7 @@ export class Registry extends EventEmitter {
       this.emit("event", args.sessionId, ev);
 
       if (ev.t === "text.delta") resultText += ev.text;
-      if (ev.t === "tool.call") steps += 1;
+      if (ev.t === "tool.call") stopReason = guard.onToolCall(ev.name, ev.input);
       if (ev.t === "usage.step") stepSum = addUsage(stepSum, ev.usage);
       if (ev.t === "usage.progress") progress = ev.usage;
       if (ev.t === "turn.completed") {
@@ -286,8 +287,8 @@ export class Registry extends EventEmitter {
       if (ev.t === "turn.completed" || ev.t === "error") break;
 
       const turnRead = Math.max(readTokens(stepSum), readTokens(progress));
-      if (limits.maxTurnSteps > 0 && steps > limits.maxTurnSteps) {
-        stopReason = `turn stopped after ${steps} tool calls (limit ${limits.maxTurnSteps}); the agent is probably looping`;
+      if (stopReason) {
+        /* set by the loop guard on this tool call */
       } else if (limits.maxTurnReadTokens > 0 && turnRead > limits.maxTurnReadTokens) {
         stopReason = `turn stopped after reading ${fmtTokens(turnRead)} tokens (limit ${fmtTokens(limits.maxTurnReadTokens)})`;
       } else if (
