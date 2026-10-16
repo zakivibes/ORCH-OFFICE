@@ -450,3 +450,25 @@ test("loop guard: many agy edits to one file are progress, not an identical-call
   const edit = { tool_info: { name: "replace_file_content", parameters: { TargetFile: "/x/panel.dart" } } };
   for (let i = 0; i < 10; i++) assert.equal(g.onToolCall("replace_file_content", edit), "");
 });
+
+test("loop guard: re-reading line ranges already read this turn stops the turn after the limit", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxRangeRereads: 2, maxExploreBeforeGraph: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0, maxTurnSteps: 0 });
+  const sed = (a: number, b: number) => ({ command: `sed -n '${a},${b}p' lib/panel.dart` });
+  assert.equal(g.onToolCall("bash", sed(1, 160)), "");
+  assert.equal(g.onToolCall("bash", sed(160, 465)), "", "overlapping by one line is not a re-read");
+  assert.equal(g.onToolCall("bash", sed(465, 820)), "");
+  assert.equal(g.onToolCall("bash", sed(1, 160)), "", "re-read 1 of 2 allowed");
+  assert.equal(g.onToolCall("bash", sed(160, 444)), "", "re-read 2 of 2 allowed");
+  assert.match(g.onToolCall("bash", sed(444, 845)), /REREAD/, "third re-read stops");
+});
+
+test("loop guard: read tool ranges, whole-file cat and small reads are handled", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxRangeRereads: 1, maxExploreBeforeGraph: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0, maxTurnSteps: 0, maxSameFileReads: 0 });
+  assert.equal(g.onToolCall("read", { filePath: "/x/a.dart", offset: 1, limit: 100 }), "");
+  assert.equal(g.onToolCall("read", { filePath: "/x/a.dart", offset: 1, limit: 100 }), "", "first re-read allowed");
+  assert.equal(g.onToolCall("bash", { command: "sed -n '3,6p' /x/a.dart" }), "", "tiny reads never count");
+  assert.equal(g.onToolCall("bash", { command: "cat /x/other.dart" }), "");
+  assert.match(g.onToolCall("bash", { command: "cat /x/a.dart" }), /REREAD/, "cat of a mostly-read file counts");
+  const off = new LoopGuard({ ...DEFAULT_LIMITS, maxRangeRereads: 0, maxExploreBeforeGraph: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0, maxTurnSteps: 0 });
+  for (let i = 0; i < 6; i++) assert.equal(off.onToolCall("bash", { command: "sed -n '1,100p' /x/a.dart" }), "");
+});

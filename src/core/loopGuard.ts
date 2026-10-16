@@ -13,6 +13,8 @@ import type { Limits } from "./limits.js";
  *   - more than `maxTestRuns` test runs in a row with no file changed in between: re-running
  *     unchanged code will not fix a failing test (fix-then-run cycles are progress and reset it);
  *   - the same file read more than `maxSameFileReads` times;
+ *   - more than `maxRangeRereads` reads whose lines (sed -n 'A,Bp', head/tail, cat, read offset/limit) were
+ *     mostly read already this turn: paging through one file again and again costs the whole context each time;
  *   - more than `maxExploreBeforeGraph` grep/read calls before the session's first `graphify` call:
  *     exploring by hand re-sends the whole context per step, the code graph answers in one;
  *   - more than `maxStepsBeforeFirstEdit` tool calls with nothing written yet: a turn that has
@@ -73,6 +75,63 @@ function signature(name: string, input: unknown): string | null {
   return `${name} ${JSON.stringify(rest)}`;
 }
 
+
+/** A read of `file` covering lines [from, to] (inclusive); to = Infinity means the whole rest of the file. */
+export interface RangeRead {
+  file: string;
+  from: number;
+  to: number;
+}
+
+/** Line-range reads in a tool call: the read tool's offset/limit, or sed -n 'A,Bp' / head / tail / cat in a shell command. */
+export function rangeReadsOf(name: string, input: unknown): RangeRead[] {
+  const out: RangeRead[] = [];
+  const a = argsOf(input);
+  if (READ_TOOLS.has(name) && name !== "view_file") {
+    const f = fileOf(input);
+    if (f) {
+      const off = Number(a?.offset ?? 0);
+      const lim = Number(a?.limit ?? 0);
+      out.push({ file: f, from: off > 0 ? off : 1, to: lim > 0 ? (off > 0 ? off : 1) + lim - 1 : Infinity });
+    }
+    return out;
+  }
+  const cmd = commandOf(input);
+  if (!cmd) return out;
+  for (const m of cmd.matchAll(/\bsed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+(\S+)/g)) {
+    out.push({ file: m[3]!, from: Number(m[1]), to: Number(m[2]) });
+  }
+  for (const m of cmd.matchAll(/\bhead\s+(?:-n\s*|-)(\d+)\s+(\S+)/g)) out.push({ file: m[2]!, from: 1, to: Number(m[1]) });
+  for (const m of cmd.matchAll(/(?:^|[;&|]\s*)(?:rtk\s+)?cat\s+([^\s|;&<>]+)\s*(?:$|[;&|])/g)) {
+    out.push({ file: m[1]!, from: 1, to: Infinity });
+  }
+  return out;
+}
+
+/** Share of [from, to] already covered by earlier reads of the same file (0..1). */
+function coveredShare(read: RangeRead, seen: [number, number][]): number {
+  // A whole-file read has no known length: after 100+ lines of that file were already read, it
+  // repeats most of what is in context.
+  if (read.to === Infinity) {
+    const lines = seen.reduce((n, [f, t]) => n + (Math.min(t, 1_000_000) - f + 1), 0);
+    return lines >= 100 ? 1 : 0;
+  }
+  const hi = Math.min(read.to, 1_000_000);
+  const span = hi - read.from + 1;
+  if (span <= 0) return 0;
+  const parts = seen.map(([f, t]) => [Math.max(f, read.from), Math.min(t, hi)] as [number, number]).filter(([f, t]) => t >= f).sort((x, y) => x[0] - y[0]);
+  let covered = 0;
+  let end = read.from - 1;
+  for (const [f, t] of parts) {
+    const start = Math.max(f, end + 1);
+    if (t >= start) {
+      covered += t - start + 1;
+      end = t;
+    }
+  }
+  return covered / span;
+}
+
 export class LoopGuard {
   private steps = 0;
   private lastEditStep = 0;
@@ -83,6 +142,8 @@ export class LoopGuard {
   private exploreSinceEdit = 0;
   private readonly seen = new Map<string, number>();
   private readonly fileReads = new Map<string, number>();
+  private readonly rangesRead = new Map<string, [number, number][]>();
+  private rangeRereads = 0;
 
   /** `graphAlreadyUsed`: the session called graphify in an earlier turn (the rule is per session). */
   constructor(private readonly limits: Limits, graphAlreadyUsed = false) {
@@ -165,6 +226,22 @@ export class LoopGuard {
       this.fileReads.set(file, n);
       if (n > l.maxSameFileReads) {
         return `${file} was read ${n} times (limit ${l.maxSameFileReads}). Find the lines with grep -n and read only those`;
+      }
+    }
+
+    if (l.maxRangeRereads > 0) {
+      for (const r of rangeReadsOf(tool, input)) {
+        const seen = this.rangesRead.get(r.file) ?? [];
+        // An 8+ line read that is at least 60% lines already read this turn is a re-read.
+        if (r.to - r.from >= 7 && seen.length && coveredShare(r, seen) >= 0.6) {
+          this.rangeRereads += 1;
+          if (this.rangeRereads > l.maxRangeRereads) {
+            return `REREAD: ${this.rangeRereads} reads of lines already read this turn (last: ${r.file} ${r.from}-${r.to === Infinity ? "end" : r.to}; limit ${l.maxRangeRereads}). ` +
+              `You have these lines in context: use them, or grep -n for the exact symbol; write the next change now`;
+          }
+        }
+        seen.push([r.from, r.to]);
+        this.rangesRead.set(r.file, seen);
       }
     }
 

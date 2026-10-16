@@ -21,6 +21,7 @@ import type { Usage } from "./types.js";
  *     "maxRepeatCalls": 6,            // identical calls in one turn (loopGuard.ts)
  *     "maxTestRuns": 12,              // test runs in one turn
  *     "maxSameFileReads": 30,         // reads of one file in one turn
+ *     "maxRangeRereads": 2,           // re-reads of line ranges already read this turn (0 = off)
  *     "maxExploreBeforeGraph": 8,     // grep/read calls before the first graphify call (0 = off)
  *     "maxStepsBeforeFirstEdit": 40,  // tool calls in a turn with nothing written yet (0 = off)
  *     "maxExploreSinceLastEdit": 60,  // read/grep calls after the turn's last edit (0 = off)
@@ -48,6 +49,8 @@ export interface Limits {
   maxTestRuns: number;
   /** Reads of the same file allowed in one turn. */
   maxSameFileReads: number;
+  /** Reads whose lines were mostly read already this turn; more than this stops the turn (0 = off). */
+  maxRangeRereads: number;
   /** grep/read calls allowed before the turn's first graphify call (0 = off). */
   maxExploreBeforeGraph: number;
   /** Tool calls a turn may make before its first edit or write (0 = off). */
@@ -74,6 +77,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxRepeatCalls: 6,
   maxTestRuns: 12,
   maxSameFileReads: 30,
+  maxRangeRereads: 2,
   maxExploreBeforeGraph: 8,
   maxStepsBeforeFirstEdit: 40,
   maxExploreSinceLastEdit: 60,
@@ -115,6 +119,7 @@ export function loadLimits(model = ""): Limits {
     maxRepeatCalls: num(file.maxRepeatCalls) ?? DEFAULT_LIMITS.maxRepeatCalls,
     maxTestRuns: num(file.maxTestRuns) ?? DEFAULT_LIMITS.maxTestRuns,
     maxSameFileReads: num(file.maxSameFileReads) ?? DEFAULT_LIMITS.maxSameFileReads,
+    maxRangeRereads: num(file.maxRangeRereads) ?? DEFAULT_LIMITS.maxRangeRereads,
     maxExploreBeforeGraph: num(file.maxExploreBeforeGraph) ?? DEFAULT_LIMITS.maxExploreBeforeGraph,
     maxStepsBeforeFirstEdit: num(file.maxStepsBeforeFirstEdit) ?? DEFAULT_LIMITS.maxStepsBeforeFirstEdit,
     maxExploreSinceLastEdit: num(file.maxExploreSinceLastEdit) ?? DEFAULT_LIMITS.maxExploreSinceLastEdit,
