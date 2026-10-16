@@ -14,6 +14,7 @@ const NUDGE_PROMPT =
   "Continue the same job. Write now; do not re-read files you already read. If an item is done, " +
   "move to the next one. End with Assumptions + files + real last test lines.";
 import { agentsMdWarning, buildAnchorPack, jobBasename, readJobText } from "./anchors.js";
+import { parseJob } from "./jobs.js";
 import {
   addUsage,
   zeroUsage,
@@ -242,6 +243,8 @@ export class Registry extends EventEmitter {
       if (warning) yield { t: "text.delta", text: `[orch] ${warning}\n` };
       const jobText = readJobText(handle.cwd, jobPath);
       if (jobText) {
+        // Stored so the Office can score the session against its job (Job %).
+        this.store.setJob(args.sessionId, jobPath, jobText, JSON.stringify(parseJob(jobText).items));
         const pack = await buildAnchorPack(handle.cwd, jobText);
         if (pack) this.graphSessions.add(args.sessionId);
         prompt =
