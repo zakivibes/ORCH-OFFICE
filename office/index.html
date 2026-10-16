@@ -112,6 +112,12 @@
   .thinkbox { border-top: 1px dashed var(--line); margin-top: 7px; padding-top: 5px; }
   .thinkbox > button { width: 100%; text-align: left; padding: 3px 6px; font-size: 11px; }
   .thinktxt { max-height: 130px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--dim); font: 11px/1.35 ui-monospace, Menlo, monospace; margin-top: 4px; }
+  .mrow { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; border-bottom: 1px dashed #2a2a44; padding: 3px 0; cursor: default; }
+  .mrow b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .score { display: inline-block; min-width: 52px; text-align: center; border: 1px solid currentColor; border-radius: 4px; font-size: 11px; font-weight: 600; padding: 0 5px; margin-right: 4px; }
+  .jobitem { padding: 5px 0; border-bottom: 1px dashed #2a2a44; font-size: 13px; }
+  .evd { color: var(--dim); font-size: 11.5px; margin: 2px 0 0 56px; }
+  .mrow, .mrow b { line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -568,6 +574,7 @@ const COLS = [
   ['worker', 'Worker', (w) => w.label, 'l'],
   ['tool', 'Tool · model', (w) => `${w.tool} ${w.model}`, 'l'],
   ['state', 'State', (w) => w.state, 'l'],
+  ['job', 'Job %', (w) => (w.jobPct ? ((w.jobPct.accepted ?? w.jobPct.auto) ?? -1) : -1), 'l'],
   ['turn', 'Turn time', (w) => (w.current ? nowS() - w.current.startedAt : -1)],
   ['turns', 'Turns', (w) => w.turns],
   ['calls', 'Tool calls', (w) => w.toolCalls],
@@ -600,6 +607,146 @@ function budgetCell(w) {
   return `<span style="color:${color}" title="of ${fmtTok(max)} read tokens">${pct}%</span>`;
 }
 
+// ───────────────────────── jobs, thrift, programs ─────────────────────────
+// Client-side copy of the daemon's tool classification (office/server.mjs does the counting).
+const WRITE_RE = /^(edit|write|multiedit|patch|write_to_file|replace_file_content|multi_replace_file_content|create_file)$/i;
+const EXPLORE_RE = /^(read|view_file|glob|list|list_dir|grep|grep_search|find_by_name)$/i;
+const GRAPHIFY_RE = /graphify/i;
+const pctColor = (v) => (v >= 80 ? '#3ddc84' : v >= 40 ? '#ffb020' : '#ff6b6b');
+
+// Worker list row: auto-scored job % → accepted grade %.
+function jobCell(w) {
+  const jp = w.jobPct;
+  if (!jp || (jp.auto == null && jp.accepted == null)) return '<span class="hint" title="no job anchored to this session">—</span>';
+  const a = jp.auto == null ? null : Math.round(jp.auto * 100);
+  const g = jp.accepted == null ? null : Math.round(jp.accepted * 100);
+  const acc = g == null ? '<span class="hint" title="not graded yet">·</span>'
+    : `<b style="color:var(--gold)" title="${esc(jp.gradeNote || 'accepted grade')}${jp.gradeAt ? ' · ' + ago(jp.gradeAt) : ''}">${g}%</b>`;
+  return `<span style="white-space:nowrap" title="${jp.hasJob ? 'job checklist' : 'grade without a job'} — auto ${a == null ? '—' : a + '%'}, accepted ${g == null ? '—' : g + '%'}">` +
+    `${a == null ? '<span class="hint">—</span>' : `<span style="color:${pctColor(a)}">${a}%</span>`} <span class="hint">→</span> ${acc}</span>`;
+}
+
+function jobBars(auto, acc) {
+  const bar = (label, v, color) => `<div class="hbar"><span>${label}</span><i style="width:${Math.max(2, Math.round(v * 100))}%;background:${color}"></i><b style="color:${color}">${Math.round(v * 100)}%</b></div>`;
+  let out = '';
+  if (auto != null) out += bar('auto score', auto, '#7c5cff');
+  if (acc != null) out += bar('accepted', acc, '#f9c74f');
+  return out;
+}
+
+// Thrift metrics vs limits.json (green / amber / red). Definitions match office/server.mjs.
+function thriftRows(m, limits = {}) {
+  const rows = [];
+  const push = (label, text, color, title) => rows.push({ label, text, color, title });
+  if (m.tokensPerEdit == null) push('tokens / edit', m.edits ? '—' : 'no edits', m.edits ? 'var(--dim)' : '#ff6b6b',
+    m.edits ? 'token totals unknown for this session' : 'no edit/write call recorded in this session');
+  else {
+    const t = m.tokensPerEdit;
+    push('tokens / edit', fmtTok(t), t <= 250e3 ? '#3ddc84' : t <= 1e6 ? '#ffb020' : '#ff6b6b',
+      `processed tokens per edit/write — green ≤ 250k, amber ≤ 1M · ${m.edits} edit${m.edits === 1 ? '' : 's'}`);
+  }
+  if (m.exploreRatio == null) push('explore : edits', '—', m.explores ? '#ffb020' : 'var(--dim)',
+    m.explores ? `${m.explores} reads/greps and no edit — pure exploration` : 'no reads yet');
+  else {
+    const lim = limits.maxExploreSinceLastEdit || 60, r = m.exploreRatio;
+    push('explore : edits', r.toFixed(1) + ' : 1', r <= lim ? '#3ddc84' : r <= lim * 1.5 ? '#ffb020' : '#ff6b6b',
+      `${m.explores} read/grep calls vs ${m.edits} edits — explore guard allows ${lim} between edits`);
+  }
+  push('graphify calls', String(m.graphify ?? 0), m.graphify > 0 ? '#3ddc84' : '#ffb020',
+    'code-graph lookups this session (0 = worked without graph anchors)');
+  const fwl = limits.maxStepsBeforeFirstEdit || 40, fw = m.stepsBeforeFirstWrite ?? 0;
+  push('steps before 1st write', String(fw), fw <= fwl * 0.6 ? '#3ddc84' : fw <= fwl ? '#ffb020' : '#ff6b6b',
+    `worst turn: tool calls before the first edit (guard: ${fwl})`);
+  const cs = m.cachedShare ?? 0;
+  push('cached share', Math.round(cs * 100) + '%', cs < 0.9 ? '#3ddc84' : cs < 0.97 ? '#ffb020' : '#ff6b6b',
+    'cache-read share of all read tokens — the conversation re-sent on every step');
+  if (m.waste == null) push('waste', '—', 'var(--dim)', 'tokens after the last edit of each turn (no per-step usage data for this tool)');
+  else {
+    const ws = m.wasteShare ?? 0;
+    push('waste', `${fmtTok(m.waste)} (${Math.round(ws * 100)}%)`, ws < 0.1 ? '#3ddc84' : ws < 0.3 ? '#ffb020' : '#ff6b6b',
+      'tokens spent after the last edit of a turn — looking without changing anything');
+  }
+  return rows;
+}
+function metricsBlock(m, limits) {
+  return thriftRows(m, limits).map((r) => `<div class="mrow" title="${esc(r.title)}"><span>${r.label}</span><b style="color:${r.color}">${r.text}</b></div>`).join('');
+}
+
+let jobCache = { id: null, data: null, at: 0 }, jobFetchingId = null, jobSeq = 0;
+function refreshJob(id) {
+  if (!id) return null;
+  if (jobCache.id === id && jobCache.data && Date.now() - jobCache.at < 2500) return jobCache.data;
+  if (jobFetchingId !== id) {
+    const seq = ++jobSeq;
+    jobFetchingId = id;
+    fetch(`/api/job?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (seq === jobSeq && j && !j.error) {
+          jobCache = { id, data: j, at: Date.now() };
+          if (selected === id && ['overview', 'job', 'turns'].includes(ui.tab)) renderPanel();
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (seq === jobSeq) jobFetchingId = null; });
+  }
+  return jobCache.id === id ? jobCache.data : null;
+}
+
+async function submitGrade(id) {
+  const pct = Number(document.getElementById('gradePct')?.value);
+  const note = document.getElementById('gradeNote')?.value || '';
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) { toast('⚠️ grade must be 0..100'); return; }
+  try {
+    const r = await fetch('/api/grade', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, pct, note }) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'failed');
+    toast(`✅ accepted at ${Math.round(pct)}% — saved`);
+    jobCache = { id: null, data: null, at: 0 };
+    refreshJob(id);
+    renderPanel();
+  } catch (e) { toast('❌ grade failed: ' + e.message); }
+}
+
+// The Job tab: checklist with per-item evidence, auto vs accepted, grade input, thrift metrics.
+function jobTabBody(w) {
+  const jd = refreshJob(w.id);
+  if (!jd) return '<div class="hint">Loading job data…</div>';
+  const acc = jd.accepted ? Math.round(jd.accepted.pct * 100) : null;
+  const gradeForm = `<div class="btns"><input id="gradePct" type="number" min="0" max="100" step="1" placeholder="%" value="${acc ?? ''}" style="width:70px">` +
+    `<input id="gradeNote" type="text" placeholder="note (why this grade)" value="${esc(jd.accepted?.note || '')}" style="flex:1;min-width:140px">` +
+    `<button onclick="submitGrade('${w.id}')">✅ Grade</button></div>`;
+  let jobPart;
+  if (jd.job) {
+    const items = (jd.items || []).map((it) => {
+      const s = Number(it.score ?? 0);
+      const col = s >= 1 ? '#3ddc84' : s > 0 ? '#ffb020' : '#ff6b6b';
+      const state = s >= 1 ? 'done' : s > 0 ? 'halfway' : 'open';
+      return `<div class="jobitem"><span class="score" style="color:${col}" title="score ${s} of 1">${state}</span><b>${esc(it.id)})</b> <span title="${esc(it.text)}">${esc(String(it.text).split('\n')[0])}</span>` +
+        `${it.evidence?.length ? `<div class="evd">↳ ${it.evidence.map(esc).join(' · ')}</div>` : ''}</div>`;
+    }).join('');
+    jobPart = `<div class="sec">Job</div>
+      <div style="font:12.5px ui-monospace,Menlo,monospace">${esc(jd.job.path)}</div>
+      <div class="hint">anchored ${ago(jd.job.createdAt)}</div>
+      ${jobBars(jd.autoPct, jd.accepted ? jd.accepted.pct : null)}
+      ${gradeForm}
+      <div class="hint" style="margin-top:4px">Grade = how much of the checklist you accept (0–100). Same table the daemon and <b>orch_grade</b> use.</div>
+      <div class="sec">Checklist · ${jd.items.length} item${jd.items.length === 1 ? '' : 's'}</div>${items || '<div class="hint">No items parsed from the job text.</div>'}
+      <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">raw job text</summary><pre>${esc(jd.job.text)}</pre></details>`;
+  } else {
+    jobPart = `<div class="sec">Job</div>
+      <div class="hint">No job anchored to this session (coordinators anchor one with <b>set_job</b> / <b>orch_job</b>).${jd.accepted ? ` A grade exists: <b style="color:var(--gold)">${acc}%</b>${jd.accepted.note ? ' — ' + esc(jd.accepted.note) : ''}.` : ''}</div>
+      ${jd.accepted ? gradeForm : ''}`;
+  }
+  const m = jd.metrics || {};
+  const turns = (m.perTurn || []).map((p) => `<tr><td>${p.n}</td><td>${p.calls}</td><td>${p.edits}</td><td>${p.explores}</td>` +
+    `<td>${p.firstWriteStep == null ? '—' : '@' + p.firstWriteStep}</td>` +
+    `<td>${p.processed == null ? '—' : fmtTok(p.processed)}</td><td>${p.waste == null ? '—' : fmtTok(p.waste)}</td></tr>`).join('');
+  return `${jobPart}
+    <div class="sec">Thrift vs limits</div>${metricsBlock(m, jd.limits || {})}
+    ${turns ? `<div class="sec">Per-turn shape</div><table class="grid"><thead><tr><th>#</th><th>Calls</th><th>Edits</th><th>Explore</th><th>1st write</th><th>Processed</th><th>Waste</th></tr></thead><tbody>${turns}</tbody></table>` : ''}`;
+}
+
 function renderDash() {
   if (ui.view !== 'dash') return;
   const ws = visible(), live = ws.filter((w) => w.state === 'working');
@@ -614,6 +761,38 @@ function renderDash() {
       <h3><span style="color:${COLORS[t] || '#fff'}">${esc(t)}</span><span class="hint">${f.live} on shift · ${f.workers} total</span></h3>
       <div class="big">${fmtTok(f.proc)}</div><div class="row"><span>generated</span><b>${fmtTok(f.gen)}</b></div>
       <div class="row"><span>tool calls</span><b>${f.calls.toLocaleString()}</b></div><div class="row"><span>turns</span><b>${f.turns}</b></div></div>`).join('');
+
+  // thrift across the team: derived from per-worker tool breakdowns + token totals (matches /api/job definitions)
+  const sumF = (f) => ws.reduce((a, w) => a + f(w), 0);
+  const bdSum = (re) => ws.reduce((a, w) => a + Object.entries(w.breakdown || {}).reduce((x, [k, v]) => x + (re.test(k) ? v : 0), 0), 0);
+  const tEdits = bdSum(WRITE_RE), tExplore = bdSum(EXPLORE_RE), tGraph = bdSum(GRAPHIFY_RE);
+  const tProc = sumF((w) => processed(w.totals));
+  const tRead = sumF((w) => n(w.totals?.inputTokens) + n(w.totals?.cacheReadTokens));
+  const tCache = sumF((w) => cached(w.totals));
+  const tpe = tEdits ? tProc / tEdits : null;
+  const ratio = tEdits ? tExplore / tEdits : null;
+  const eLim = data.limits?.maxExploreSinceLastEdit || 60;
+  const thriftCards = `
+    <div class="card" style="cursor:default"><h3><span>💸 Tokens / edit</span><span class="hint">${tEdits} edits</span></h3>
+      <div class="big" style="color:${tpe == null ? '#ff6b6b' : tpe <= 250e3 ? '#3ddc84' : tpe <= 1e6 ? '#ffb020' : '#ff6b6b'}">${tpe == null ? 'no edits' : fmtTok(tpe)}</div>
+      <div class="row"><span>processed</span><b>${fmtTok(tProc)}</b></div><div class="row"><span>green ≤</span><b>250k</b></div></div>
+    <div class="card" style="cursor:default"><h3><span>🔍 Explore : edits</span><span class="hint">guard ${eLim}</span></h3>
+      <div class="big" style="color:${ratio == null ? (tExplore ? '#ffb020' : 'var(--dim)') : ratio <= eLim ? '#3ddc84' : ratio <= eLim * 1.5 ? '#ffb020' : '#ff6b6b'}">${ratio == null ? '—' : ratio.toFixed(1) + ' : 1'}</div>
+      <div class="row"><span>reads + greps</span><b>${tExplore}</b></div><div class="row"><span>graphify</span><b style="color:${tGraph ? '#3ddc84' : '#ffb020'}">${tGraph}</b></div></div>
+    <div class="card" style="cursor:default"><h3><span>♻️ Cached share</span><span class="hint">context re-sent</span></h3>
+      <div class="big" style="color:${tRead ? (tCache / tRead < 0.9 ? '#3ddc84' : tCache / tRead < 0.97 ? '#ffb020' : '#ff6b6b') : 'var(--dim)'}">${tRead ? Math.round((tCache / tRead) * 100) + '%' : '—'}</div>
+      <div class="row"><span>read tokens</span><b>${fmtTok(tRead)}</b></div><div class="row"><span>cached</span><b>${fmtTok(tCache)}</b></div></div>`;
+
+  // programs: weighted checklist coverage across linked sessions
+  const progCards = (programsData || []).map((p) => {
+    const pct = Math.round((p.pct ?? 0) * 100);
+    const sess = (p.sessions || []).map((s) => `${esc(s.label)} ${s.pct != null ? Math.round(s.pct * 100) + '%' : '—'}${s.share ? ` <span class="hint">(${Math.round(s.share * 100)}%)</span>` : ''}`).join(' · ');
+    return `<div class="card" style="cursor:default"><h3><span>🎯 ${esc(p.name)}</span><span class="hint">${(p.sessions || []).length} session${(p.sessions || []).length === 1 ? '' : 's'}</span></h3>
+      <div class="big" style="color:${pctColor(pct)}">${pct}%</div><div class="hbar"><i style="width:${Math.min(100, pct)}%;background:#7c5cff"></i><b>${pct}%</b></div>
+      <div class="row"><span>tokens spent</span><b>${fmtTok(p.tokensSpent)}</b></div>
+      <div class="row"><span>tokens / % point</span><b>${p.tokensPerPct ? fmtTok(p.tokensPerPct) : '—'}</b></div>
+      <div class="said" title="${esc((p.sessions || []).map((s) => s.label).join(', '))}">${sess || 'no sessions linked yet'}</div></div>`;
+  }).join('');
 
   // live turns
   const liveCards = live.map((w) => {
@@ -638,6 +817,7 @@ function renderDash() {
       <td>${STATE_DOT(w)}${esc(w.label)}${w.stalled ? ' <span class="tag warn">quiet</span>' : ''}${w.providerName ? '<span class="ppill" style="color:' + providerColor(w.provider) + ';border:1px solid ' + providerColor(w.provider) + '">' + esc(w.providerName) + '</span>' : ''}${w.discount?.active ? '<span class="night-label">🌙 ' + esc(w.discount.label) + '</span>' : (w.discount ? '<span class="nm-note">' + esc(w.discount.label) + ' ' + esc(w.discount.from) + '–' + esc(w.discount.to) + '</span>' : '')}</td>
       <td class="l"><span style="color:${COLORS[w.tool] || '#fff'}">${esc(w.tool)}</span> <span class="hint">${esc(String(w.model).replace(/^.*\//, ''))}</span></td>
       <td class="l">${esc(w.state)}</td>
+      <td class="l">${jobCell(w)}</td>
       <td ${w.current ? `data-since="${w.current.startedAt}"` : ''}>${w.current ? dur(nowS() - w.current.startedAt) : '—'}</td>
       <td>${w.turns}</td><td>${w.toolCalls.toLocaleString()}</td>
       <td title="${processed(w.totals).toLocaleString()}">${fmtTok(processed(w.totals))}</td>
@@ -647,7 +827,7 @@ function renderDash() {
       <td>${ago(w.lastAt)}</td>
       <td>${spark(w.turnRows.map((t) => processed(t.usage)), 90, 22, COLORS[w.tool])}</td></tr>`; }).join('');
   const head = COLS.map(([k, label, , cls]) => `<th class="${cls || ''}" onclick="sortBy('${k}')">${label}${ui.sort === k ? (ui.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') + '<th>Per-turn trend</th>';
-  const foot = `<tr><td>Total · ${ws.length} workers</td><td></td><td></td><td></td><td>${sum((w) => w.turns)}</td><td>${sum((w) => w.toolCalls).toLocaleString()}</td>
+  const foot = `<tr><td>Total · ${ws.length} workers</td><td></td><td></td><td></td><td></td><td>${sum((w) => w.turns)}</td><td>${sum((w) => w.toolCalls).toLocaleString()}</td>
       <td>${fmtTok(sum((w) => processed(w.totals)))}</td><td></td><td>${fmtTok(sum((w) => generated(w.totals)))}</td><td>${fmtTok(sum((w) => n(w.totals?.inputTokens)))}</td>
       <td>${fmtTok(sum((w) => cached(w.totals)))}</td><td>${fmtTok(sum((w) => w.current?.tokensPerMin ?? 0))}</td><td></td><td></td></tr>`;
 
@@ -659,6 +839,8 @@ function renderDash() {
   const el = document.getElementById('dash');
   const keep = el.scrollTop;
   el.innerHTML = `<h4 class="dsec" style="margin-top:0">By worker type</h4><div class="cards">${famCards}</div>
+    <h4 class="dsec">Thrift</h4><div class="cards">${thriftCards}</div>
+    ${programsData.length ? `<h4 class="dsec">Programs</h4><div class="cards">${progCards}</div>` : ''}
     <h4 class="dsec">Live turns · ${live.length}</h4><div class="cards">${liveCards}</div>
     <h4 class="dsec">All workers · click a column to sort, a row to inspect</h4>
     <div style="overflow-x:auto"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${tr}</tbody><tfoot>${foot}</tfoot></table></div>
@@ -669,10 +851,11 @@ function sortBy(k) { if (ui.sort === k) ui.dir *= -1; else { ui.sort = k; ui.dir
 function pick(id) { selected = id; renderPanel(); renderDash(); }
 
 function exportCsv() {
-  const head = ['label', 'id', 'tool', 'model', 'state', 'turns', 'tool_calls', 'processed', 'generated', 'fresh_input', 'cached_input', 'output', 'thinking', 'cost_usd', 'turn_elapsed_s', 'last_activity'];
+  const head = ['label', 'id', 'tool', 'model', 'state', 'turns', 'tool_calls', 'processed', 'generated', 'fresh_input', 'cached_input', 'output', 'thinking', 'cost_usd', 'turn_elapsed_s', 'last_activity', 'job_auto', 'job_accepted'];
   const rows = visible().map((w) => [w.label, w.id, w.tool, w.model, w.state, w.turns, w.toolCalls, processed(w.totals), generated(w.totals),
     n(w.totals?.inputTokens), cached(w.totals), n(w.totals?.outputTokens), n(w.totals?.thinkingTokens), n(w.costUsd),
-    w.current ? Math.round((nowS() - w.current.startedAt) / 1000) : '', new Date(w.lastAt).toISOString()]);
+    w.current ? Math.round((nowS() - w.current.startedAt) / 1000) : '', new Date(w.lastAt).toISOString(),
+    w.jobPct?.auto ?? '', w.jobPct?.accepted ?? '']);
   const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -787,16 +970,21 @@ function renderPanel() {
       ${gone.map((g) => `<div style="cursor:pointer" onclick="pick('${g.id}')">🏁 <b>${esc(g.label)}</b> <span class="hint">· ${esc(g.tool)} · ${g.toolCalls} calls · ${fmtTok(processed(g.totals))} · ${ago(g.lastAt)}</span></div>`).join('') || '<div class="hint">none yet</div>'}`;
     return;
   }
-  const TABS = [['overview', 'Overview'], ['conversation', 'Conversation'], ['activity', 'Activity'], ['turns', `Turns (${w.turns})`], ['files', `Files (${w.files.length})`], ['orders', 'Orders']];
+  const TABS = [['overview', 'Overview'], ['job', 'Job'], ['conversation', 'Conversation'], ['activity', 'Activity'], ['turns', `Turns (${w.turns})`], ['files', `Files (${w.files.length})`], ['orders', 'Orders']];
   let body = '';
   if (ui.tab === 'overview') {
     const bd = Object.entries(w.breakdown || {}).sort((a, b) => b[1] - a[1]);
+    const jd = refreshJob(w.id);
     body = `${liveBlock(w)}
+      ${w.jobPct && (w.jobPct.auto != null || w.jobPct.accepted != null) ? `<div class="sec">Job progress</div>${jobBars(w.jobPct.auto, w.jobPct.accepted)}` : ''}
       <div class="sec">Tokens</div>${usageBlock(w)}
       <div class="sec">Per-turn processed tokens</div>${spark(w.turnRows.map((t) => processed(t.usage)), 380, 46, COLORS[w.tool]) || '<span class="hint">no turns yet</span>'}
       <div class="sec">Tool calls · ${w.toolCalls.toLocaleString()}</div>${bars(bd, (v) => v.toLocaleString()) || '<span class="hint">none recorded</span>'}
+      <div class="sec">Thrift vs limits</div>${jd ? metricsBlock(jd.metrics || {}, jd.limits || {}) : '<div class="hint">loading…</div>'}
       <div class="hint" style="margin-top:10px">Hired ${ago(w.createdAt)} · last activity ${ago(w.lastAt)} · desk ${esc(w.cwd)}</div>
       ${w.state !== 'gone' ? `<div class="btns"><button onclick="cheer('${w.id}','praise')">👏 Praise</button><button onclick="cheer('${w.id}','coffee')">☕ Buy coffee</button></div>` : ''}`;
+  } else if (ui.tab === 'job') {
+    body = jobTabBody(w);
   } else if (ui.tab === 'conversation') {
     body = conversationBody(w);
   } else if (ui.tab === 'activity') {
@@ -805,12 +993,14 @@ function renderPanel() {
     body = `<div class="chips">${Object.keys(kinds).map((k) => `<button class="${ui.feed === k ? 'on' : ''}" onclick="ui.feed='${k}';saveUi();renderPanel()">${k}</button>`).join('')}</div>
       <div class="feed">${f.slice().reverse().map((e) => `<div class="${e.kind}">${e.kind === 'tool' ? (TOOL_ICON[e.name] || '⚙️') + ' ' : e.kind === 'say' ? '💬 ' : ''}<b>${esc(e.name)}</b> ${esc(e.detail)} <span class="hint">${ago(e.at)}</span></div>`).join('') || '<div class="hint">nothing yet</div>'}</div>`;
   } else if (ui.tab === 'turns') {
-    body = `<table class="grid"><thead><tr><th>#</th><th>Started</th><th>Duration</th><th>Steps</th><th>Processed</th><th>Gen.</th><th class="l">Status</th></tr></thead><tbody>
-      ${w.turnRows.slice().reverse().map((t) => `<tr title="${esc(t.prompt)}"><td>${t.n}</td><td>${ago(t.startedAt)}</td>
+    const pts = (refreshJob(w.id)?.metrics?.perTurn) || [];
+    body = `<table class="grid"><thead><tr><th>#</th><th>Started</th><th>Duration</th><th>Steps</th><th>Edits</th><th>Explore</th><th>1st write</th><th>Processed</th><th>Gen.</th><th class="l">Status</th></tr></thead><tbody>
+      ${w.turnRows.slice().reverse().map((t) => { const p = pts[t.n - 1]; return `<tr title="${esc(t.prompt)}"><td>${t.n}</td><td>${ago(t.startedAt)}</td>
         <td ${t.endedAt ? '' : `data-since="${t.startedAt}"`}>${dur(t.durationMs)}</td><td>${t.steps ?? '—'}</td>
+        <td>${p ? p.edits : '—'}</td><td>${p ? p.explores : '—'}</td><td>${p && p.firstWriteStep != null ? '@' + p.firstWriteStep : '—'}</td>
         <td>${fmtTok(processed(t.usage))}</td><td>${fmtTok(generated(t.usage))}</td>
-        <td class="l">${t.endedAt ? (t.aborted ? '<span class="warn">aborted</span>' : 'done') : '<span style="color:#3ddc84">running</span>'}</td></tr>`).join('')}
-      </tbody></table><div class="hint" style="margin-top:6px">Hover a row to see its prompt.</div>`;
+        <td class="l">${t.endedAt ? (t.aborted ? '<span class="warn">aborted</span>' : 'done') : '<span style="color:#3ddc84">running</span>'}</td></tr>`; }).join('')}
+      </tbody></table><div class="hint" style="margin-top:6px">Hover a row to see its prompt. Edits / Explore / 1st write come from the job metrics${pts.length ? '' : ' (loading…)'}.</div>`;
   } else if (ui.tab === 'files') {
     body = `<div class="files">${w.files.map((f) => `<div>✏️ ${esc(f.path)} <span class="hint">${ago(f.at)}</span></div>`).join('') || '<div class="hint">No edits recorded (reads are not listed).</div>'}</div>`;
   } else {
@@ -840,6 +1030,11 @@ function toast(msg) {
 
 // ───────────────────────── data ─────────────────────────
 let discountData = [];
+let programsData = [];
+async function fetchPrograms() {
+  try { const r = await fetch('/api/programs', { cache: 'no-store' }); const j = await r.json(); programsData = j.programs || []; }
+  catch { programsData = []; }
+}
 async function fetchDiscounts() {
   try { const r = await fetch('/api/discounts', { cache: 'no-store' }); discountData = await r.json(); }
   catch { discountData = []; }
@@ -866,6 +1061,7 @@ async function poll() {
     const j = await r.json(); if (j.error) throw new Error(j.error);
     const first = !data.loaded; data = j; data.loaded = true; data.first = first;
     fetchDiscounts();
+    fetchPrograms();
     skew = j.now - Date.now();
     if (first && wantWorker) selected = data.workers.find((w) => w.id.startsWith(wantWorker))?.id ?? null;
     syncEntities();

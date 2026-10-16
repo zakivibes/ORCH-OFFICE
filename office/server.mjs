@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 4747);
@@ -28,6 +28,17 @@ const OPENCODE_CONFIG_PATH = ['opencode.json', 'opencode.jsonc']
     .map((f) => join(homedir(), '.config', 'opencode', f))
     .find((f) => existsSync(f)) ?? join(homedir(), '.config', 'opencode', 'opencode.json');
 const DAEMON_ENTRY_PATH = join(HERE, '..', 'dist', 'core', 'daemon-entry.js');
+
+// O1's job scoring and program rollup (src/core/jobs|progress|programs.ts, compiled by
+// `npm run build`). Imported here, never re-implemented — the office is a viewer.
+let coreJobs = null, coreProgress = null, corePrograms = null;
+try {
+    const core = (p) => import(pathToFileURL(join(HERE, '..', 'dist', 'core', p)).href);
+    [coreJobs, coreProgress, corePrograms] =
+        await Promise.all([core('jobs.js'), core('progress.js'), core('programs.js')]);
+} catch {
+    console.error('orch core (dist/) not found — job scoring and programs disabled. Run: npm run build');
+}
 
 let openCodeProviderNames = {};
 try {
@@ -224,6 +235,172 @@ function touchedPath(name, input) {
     return path ? String(path).replace(homedir(), '~') : null;
 }
 
+// The five token kinds a usage record carries (Usage in src/core/types.ts).
+const TOKEN_KEYS = ['inputTokens', 'outputTokens', 'thinkingTokens', 'cacheReadTokens', 'cacheWriteTokens'];
+function tokensSum(u) {
+    if (!u) return 0;
+    let t = 0;
+    for (const k of TOKEN_KEYS) t += Number(u[k] ?? 0);
+    return t;
+}
+
+// Read-only reconnaissance tools (limits.ts counts the same set), plus code-graph lookups.
+const EXPLORE_TOOLS = /^(read|view_file|glob|list|list_dir|grep|grep_search|find_by_name)$/i;
+const GRAPHIFY_RE = /graphify/i;
+
+// --- Jobs, grades, thrift ------------------------------------------------
+
+// Scored checklist for a session: O1's progress.ts (imported, never copied) run over the raw
+// event log. Cached until the session's events/turns/job/grade state changes, so the 3s poll
+// of /api/workers does not rescore every time. Returns null when the session has neither.
+const jobCache = new Map();
+function jobProgressFor(h, sessionId) {
+    const job = h.prepare('SELECT * FROM jobs WHERE session_id = ?').get(sessionId);
+    const grade = h.prepare('SELECT * FROM grades WHERE session_id = ?').get(sessionId);
+    if (!job && !grade) return null;
+    const nEvents = h.prepare('SELECT COUNT(*) AS c FROM events WHERE session_id = ?').get(sessionId).c;
+    const nTurns = h.prepare('SELECT COUNT(*) AS c FROM turns WHERE session_id = ?').get(sessionId).c;
+    const key = `${nEvents}|${nTurns}|${job?.created_at ?? ''}|${grade?.at ?? ''}`;
+    const hit = jobCache.get(sessionId);
+    if (hit && hit.key === key) return hit.value;
+
+    // items JSON first (what setJob stored); fall back to re-parsing the raw job text.
+    let items = [];
+    if (job) {
+        try {
+            const parsed = JSON.parse(String(job.items ?? '[]'));
+            if (Array.isArray(parsed) && parsed.length) items = parsed;
+        } catch { /* older rows keep only the text */ }
+        if (!items.length && coreJobs && job.text) {
+            try { items = coreJobs.parseJob(String(job.text)).items; } catch { /* keep [] */ }
+        }
+    }
+    let scored = [], autoPct = null;
+    if (job && items.length) {
+        if (coreProgress) {
+            const events = h.prepare('SELECT payload FROM events WHERE session_id = ? ORDER BY seq LIMIT 200000')
+                .all(sessionId).map((e) => parse(e.payload));
+            const turns = h.prepare('SELECT result_text FROM turns WHERE session_id = ? ORDER BY id').all(sessionId)
+                .map((t) => ({ resultText: String(t.result_text ?? '') }));
+            const r = coreProgress.scoreItems(items, events, turns);
+            scored = r.items;
+            autoPct = r.autoPct;
+        } else {
+            autoPct = 0; // dist not built — say so instead of pretending the job is untouched
+        }
+    }
+    const value = {
+        job: job ? { path: job.path, text: job.text, createdAt: Number(job.created_at) } : null,
+        items: scored,
+        autoPct,
+        accepted: grade ? { pct: Number(grade.pct), note: String(grade.note ?? ''), at: Number(grade.at) } : null,
+    };
+    if (jobCache.size > 500) jobCache.clear();
+    jobCache.set(sessionId, { key, value });
+    return value;
+}
+
+// Thrift metrics (plan A3/A5): what the session spent per unit of work, how much of the spend
+// was re-sent context, and how many tokens went to turns/steps that produced no further edit.
+// Counts distinct call ids like worker() does, and reads only tool.call/usage.step events.
+function thriftMetrics(h, oc, s, turns, totals, now) {
+    const perTurn = turns.map((t, i) => ({
+        n: i + 1, startedAt: t.started_at, endedAt: t.ended_at,
+        calls: 0, edits: 0, explores: 0, graphify: 0, firstWriteStep: null,
+        editLastAt: null, stepTokens: 0, stepTokensAfterEdit: 0, hasStepData: false,
+    }));
+    // An event belongs to the turn that was running when it arrived.
+    const segs = perTurn.map((pt, i) => ({
+        pt, start: turns[i].started_at,
+        end: i + 1 < turns.length ? turns[i + 1].started_at : Number.MAX_SAFE_INTEGER,
+    }));
+    const segOf = (at) => segs.find((g) => at >= g.start && at < g.end);
+
+    const seen = new Set();
+    for (const r of h.prepare(`
+            SELECT at, json_extract(payload, '$.t') AS t, json_extract(payload, '$.name') AS name,
+                   json_extract(payload, '$.id') AS id, json_extract(payload, '$.usage') AS us
+              FROM events WHERE session_id = ? AND json_extract(payload, '$.t') IN ('tool.call', 'usage.step')
+             ORDER BY seq`).all(s.id)) {
+        const g = segOf(Number(r.at));
+        if (!g) continue;
+        const pt = g.pt;
+        if (r.t === 'usage.step') {
+            const n = tokensSum(parse(r.us));
+            pt.stepTokens += n;
+            if (pt.editLastAt != null && Number(r.at) >= pt.editLastAt) pt.stepTokensAfterEdit += n;
+            pt.hasStepData = true;
+            continue;
+        }
+        const id = String(r.id ?? '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        pt.calls++;
+        const name = String(r.name ?? '');
+        if (WRITE_TOOLS.test(name)) {
+            pt.edits++;
+            pt.editLastAt = Number(r.at);
+            if (pt.firstWriteStep == null) pt.firstWriteStep = pt.calls - 1;
+        } else if (EXPLORE_TOOLS.test(name)) pt.explores++;
+        else if (GRAPHIFY_RE.test(name)) pt.graphify++;
+    }
+
+    // Per-turn tokens: opencode's ledger when readable, else agy-style usage.step sums.
+    const useOc = s.tool === 'opencode' && s.native && oc;
+    let waste = 0, wasteKnown = false;
+    for (let i = 0; i < turns.length; i++) {
+        const t = turns[i], pt = perTurn[i];
+        const turnEnd = t.ended_at ?? now;
+        let turnTokens = null;
+        if (useOc) {
+            try { turnTokens = tokensSum(opencodeUsage(oc, s.native, t.started_at, turnEnd).usage); } catch { /* fall back */ }
+        }
+        if (turnTokens == null && pt.hasStepData) turnTokens = pt.stepTokens;
+        if (turnTokens == null) { pt.processed = null; pt.waste = null; continue; }
+        let w = 0;
+        if (pt.edits === 0) w = turnTokens;                 // wrote nothing: the whole turn was waste
+        else if (pt.editLastAt != null) {
+            if (useOc) {
+                try { w = tokensSum(opencodeUsage(oc, s.native, pt.editLastAt, turnEnd).usage); } catch { w = 0; }
+            } else {
+                w = pt.stepTokensAfterEdit;
+            }
+        }
+        pt.processed = turnTokens;
+        pt.waste = w;
+        waste += w;
+        wasteKnown = true;
+    }
+
+    const edits = perTurn.reduce((a, p) => a + p.edits, 0);
+    const explores = perTurn.reduce((a, p) => a + p.explores, 0);
+    const graphify = perTurn.reduce((a, p) => a + p.graphify, 0);
+    const processed = tokensSum(totals);
+    const readTokens = Number(totals?.inputTokens ?? 0) + Number(totals?.cacheReadTokens ?? 0);
+    return {
+        calls: seen.size, edits, explores, graphify,
+        tokensPerEdit: edits > 0 ? processed / edits : null,
+        exploreRatio: edits > 0 ? explores / edits : null,
+        stepsBeforeFirstWrite: perTurn.reduce((a, p) => Math.max(a, p.firstWriteStep ?? 0), 0),
+        cachedShare: readTokens > 0 ? Number(totals?.cacheReadTokens ?? 0) / readTokens : 0,
+        waste: wasteKnown ? waste : null,
+        wasteShare: wasteKnown && processed > 0 ? waste / processed : null,
+        processed,
+        perTurn: perTurn.map(({ editLastAt, stepTokens, stepTokensAfterEdit, hasStepData, ...rest }) => rest),
+    };
+}
+
+// Whole-session tokens for program rollups: opencode's ledger when readable, else orch's totals.
+function sessionTokensFor(oc, s) {
+    if (s.tool === 'opencode' && s.native && oc) {
+        try {
+            const u = opencodeUsage(oc, s.native);
+            if (u.steps > 0) return tokensSum(u.usage);
+        } catch { /* fall back */ }
+    }
+    return tokensSum(parse(s.totals));
+}
+
 function worker(h, oc, s, now, detail = false) {
     const turns = h.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id').all(s.id);
     const lastTurn = turns[turns.length - 1];
@@ -387,6 +564,9 @@ function worker(h, oc, s, now, detail = false) {
         });
     }
 
+    // Job progress (O1): auto-scored checklist % plus the accepted grade, when one exists.
+    const jp = jobProgressFor(h, s.id);
+
     return {
         id: s.id,
         label: s.label || s.id.slice(0, 8),
@@ -400,6 +580,14 @@ function worker(h, oc, s, now, detail = false) {
         totals, costUsd, usageSource,
         state, stalled, lastAt, lastText,
         toolCalls, breakdown,
+        jobPct: jp ? {
+            auto: jp.autoPct,
+            accepted: jp.accepted ? jp.accepted.pct : null,
+            gradeNote: jp.accepted ? jp.accepted.note : null,
+            gradeAt: jp.accepted ? jp.accepted.at : null,
+            items: jp.items.length,
+            hasJob: !!jp.job,
+        } : null,
         turns: turns.length,
         turnRows: turnRows.slice(-30),
         current,
@@ -454,6 +642,10 @@ function sessionLimits() {
     return {
         maxSessionReadTokens: num(cfg.maxSessionReadTokens ?? process.env.ORCH_MAX_SESSION_READ_TOKENS, 60_000_000),
         maxTurnSteps: num(cfg.maxTurnSteps ?? process.env.ORCH_MAX_TURN_STEPS, 250),
+        // The exploration guards (loopGuard/graphify reminders) — the thrift strip colors against these.
+        maxStepsBeforeFirstEdit: num(cfg.maxStepsBeforeFirstEdit ?? process.env.ORCH_MAX_STEPS_BEFORE_FIRST_EDIT, 40),
+        maxExploreSinceLastEdit: num(cfg.maxExploreSinceLastEdit ?? process.env.ORCH_MAX_EXPLORE_SINCE_LAST_EDIT, 60),
+        maxExploreBeforeGraph: num(cfg.maxExploreBeforeGraph ?? process.env.ORCH_MAX_EXPLORE_BEFORE_GRAPH, 8),
         overrides: Array.isArray(cfg.overrides) ? cfg.overrides : [],
     };
 }
@@ -572,6 +764,150 @@ createServer(async (req, res) => {
                 if (oc) oc.close();
             }
             return;
+        }
+        // Full thrift + job detail for one session (the Job tab, Overview metrics, Turns table).
+        if (url.pathname === '/api/job') {
+            const id = url.searchParams.get('id');
+            if (!id) {
+                res.writeHead(400, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'missing id' }));
+            }
+            const h = open(DB_PATH);
+            if (!h) {
+                res.writeHead(500, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'db unavailable' }));
+            }
+            const oc = open(OPENCODE_DB);
+            try {
+                const now = Date.now();
+                const s = h.prepare('SELECT * FROM sessions WHERE id LIKE ? LIMIT 1').get(id + '%');
+                if (!s) {
+                    res.writeHead(404, { 'content-type': 'application/json' });
+                    return res.end(JSON.stringify({ error: 'not found' }));
+                }
+                const turns = h.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id').all(s.id);
+                let totals = { ...ZERO(), ...parse(s.totals) };
+                let costUsd = Number(s.cost_usd ?? 0);
+                if (s.tool === 'opencode' && s.native && oc) {
+                    try {
+                        const all = opencodeUsage(oc, s.native);
+                        if (all.steps > 0) { totals = all.usage; costUsd = all.costUsd; }
+                    } catch { /* schema drift or locked db */ }
+                }
+                const jp = jobProgressFor(h, s.id) ?? { job: null, items: [], autoPct: null, accepted: null };
+                res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+                return res.end(JSON.stringify({
+                    id: s.id,
+                    label: s.label || s.id.slice(0, 8),
+                    tool: s.tool,
+                    model: s.model,
+                    closedAt: s.closed_at,
+                    job: jp.job,
+                    items: jp.items,
+                    autoPct: jp.autoPct,
+                    accepted: jp.accepted,
+                    metrics: thriftMetrics(h, oc, s, turns, totals, now),
+                    limits: sessionLimits(),
+                    costUsd,
+                }));
+            } finally {
+                h.close();
+                oc?.close();
+            }
+        }
+        // Accept/override a job's completion. Same table and 0..1 scale the daemon and MCP use,
+        // so a grade saved here is visible to `orch_grade` and the daemon's /progress (and vice versa).
+        if (url.pathname === '/api/grade' && req.method === 'POST') {
+            const body = await readBodyJson(req);
+            const id = String(body.id ?? '');
+            const pct = Number(body.pct);
+            const note = String(body.note ?? '').slice(0, 500);
+            if (!id) {
+                res.writeHead(400, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'missing id' }));
+            }
+            if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+                res.writeHead(400, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'pct must be a number between 0 and 100' }));
+            }
+            const h = new DatabaseSync(DB_PATH); // the office's single write: the grades table
+            try {
+                const s = h.prepare('SELECT id FROM sessions WHERE id LIKE ? LIMIT 1').get(id + '%');
+                if (!s) {
+                    res.writeHead(404, { 'content-type': 'application/json' });
+                    return res.end(JSON.stringify({ error: 'not found' }));
+                }
+                h.prepare(`INSERT INTO grades (session_id, pct, note, at) VALUES (?, ?, ?, ?)
+                           ON CONFLICT(session_id) DO UPDATE SET pct = excluded.pct, note = excluded.note, at = excluded.at`)
+                    .run(s.id, pct / 100, note, Date.now());
+                res.writeHead(200, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ ok: true, id: s.id, pct }));
+            } finally {
+                h.close();
+            }
+        }
+        // Program rollups (O1's programs.ts): anchored completion per program and its sessions.
+        if (url.pathname === '/api/programs') {
+            if (!corePrograms) {
+                res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+                return res.end(JSON.stringify({ programs: [] }));
+            }
+            const h = open(DB_PATH);
+            if (!h) {
+                res.writeHead(500, { 'content-type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'db unavailable' }));
+            }
+            const oc = open(OPENCODE_DB);
+            try {
+                const sessionRow = (id) => h.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+                const pctOf = (id) => {
+                    const jp = jobProgressFor(h, id);
+                    if (!jp) return null;
+                    if (jp.accepted) return jp.accepted.pct;
+                    return jp.autoPct ?? 0;
+                };
+                const tokensOf = (id) => {
+                    const s = sessionRow(id);
+                    return s ? sessionTokensFor(oc, s) : 0;
+                };
+                const { programs } = corePrograms.loadPrograms();
+                const body = programs.map((p) => {
+                    const { pct, tokensSpent } = corePrograms.programPct(p, pctOf, tokensOf);
+                    const weightSum = (p.items ?? []).reduce((a, i) => a + Number(i.weight || 0), 0);
+                    const seenS = new Set();
+                    const sessions = [];
+                    for (const item of p.items ?? []) {
+                        for (const sid of item.sessions ?? []) {
+                            if (seenS.has(sid)) continue;
+                            seenS.add(sid);
+                            const pc = pctOf(sid);
+                            let share = 0;
+                            for (const it of p.items ?? []) {
+                                if ((it.sessions ?? []).includes(sid)) share += Number(it.weight || 0) * (pc ?? 0);
+                            }
+                            const s = sessionRow(sid);
+                            sessions.push({
+                                id: sid,
+                                label: s ? s.label || sid.slice(0, 8) : sid.slice(0, 8),
+                                pct: pc,
+                                share: weightSum > 0 ? share / weightSum : 0,
+                                tokens: tokensOf(sid),
+                            });
+                        }
+                    }
+                    return {
+                        id: p.id, name: p.name,
+                        pct, tokensSpent,
+                        tokensPerPct: pct > 0.0001 ? tokensSpent / (pct * 100) : null,
+                        sessions,
+                    };
+                });
+                res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+                return res.end(JSON.stringify({ programs: body }));
+            } finally {
+                h.close();
+                oc?.close();
+            }
         }
         if (url.pathname === '/api/orchestra/config') {
             let config = {
