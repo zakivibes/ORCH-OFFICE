@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { toOpencodePermission, workerMcpConfig, workerEnvConfig } from "../permissions/translate.js";
 import type { Policy } from "../permissions/policy.js";
 import { AsyncQueue, DeltaCoalescer, normalized, asNormalized } from "../core/queue.js";
+import { loadLimits } from "../core/limits.js";
 import { resolveBinary } from "../core/bin.js";
 import {
   zeroUsage,
@@ -255,6 +256,8 @@ export class OpencodeAdapter implements Adapter {
     const startedAt = Date.now();
     let costUsd = 0;
     let turns = 0;
+    // Provider retries are re-read per turn so ~/.orchestrator/limits.json can be tuned live.
+    const limits = loadLimits(handle.model);
 
     // opencode requires model as an object; a "provider/model" string is a 400.
     const body: Record<string, unknown> = {
@@ -275,6 +278,9 @@ export class OpencodeAdapter implements Adapter {
     // that stale idle first and "complete" instantly with nothing done. Discard the leftovers.
     entry.events.drain();
     let sawActivity = false;
+    // Set when a provider rate limit / retry cap ends the turn: the session is aborted in the
+    // finally below, because a consumer that breaks on the error event skips code after the yield.
+    let rateLimitAbort = false;
 
     // prompt_async so the SSE stream carries progress; we end on message.completed.
     void this.post(entry, `/session/${entry.sessionId}/prompt_async`, {
@@ -378,10 +384,39 @@ export class OpencodeAdapter implements Adapter {
           continue;
         }
 
+        // opencode retries provider errors internally and used to say nothing for many
+        // minutes, so the worker looked frozen. session.status with type "retry"
+        // (opencode 1.19 SDK: EventSessionStatus) is the only surface that reports it.
+        if (type === "session.status") {
+          const status = (props.status ?? {}) as Record<string, unknown>;
+          if (String(status.type ?? "") !== "retry") continue; // idle/busy: session.idle ends the turn
+          sawActivity = true;
+          const attempt = Number(status.attempt ?? 0);
+          const message = String(status.message ?? "");
+          const flushed = coalescer.flush();
+          if (flushed) yield { t: "text.delta", text: flushed };
+          yield { t: "text.delta", text: `[orch] provider retry ${attempt}: ${message}\n` };
+          if (/rate.?limit|429|quota|too many requests/i.test(message) || (limits.maxProviderRetries > 0 && attempt >= limits.maxProviderRetries)) {
+            // End the turn so the registry's quota block sees the error instead of the seat
+            // sitting silent until opencode gives up; the session is aborted in the finally
+            // (the same POST /session/:id/abort that adapter.interrupt sends).
+            rateLimitAbort = true;
+            yield { t: "error", kind: "rate_limit", message: `provider rate-limited: ${message}` };
+            return;
+          }
+          continue;
+        }
+
         if (type === "session.error" || type === "message.error") {
           const flushed = coalescer.flush();
           if (flushed) yield { t: "text.delta", text: flushed };
-          yield { t: "error", kind: "api", message: JSON.stringify(props).slice(0, 500) };
+          const message = JSON.stringify(props).slice(0, 500);
+          if (/rate.?limit|429|quota|too many requests/i.test(message)) {
+            rateLimitAbort = true;
+            yield { t: "error", kind: "rate_limit", message: `provider rate-limited: ${message}` };
+            return;
+          }
+          yield { t: "error", kind: "api", message };
           return;
         }
 
@@ -408,6 +443,7 @@ export class OpencodeAdapter implements Adapter {
       };
     } finally {
       signal?.removeEventListener("abort", onAbort);
+      if (rateLimitAbort) await this.interrupt(handle);
     }
   }
 

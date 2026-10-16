@@ -15,6 +15,10 @@ import type { Limits } from "./limits.js";
  *   - the same file read more than `maxSameFileReads` times;
  *   - more than `maxExploreBeforeGraph` grep/read calls before the session's first `graphify` call:
  *     exploring by hand re-sends the whole context per step, the code graph answers in one;
+ *   - more than `maxStepsBeforeFirstEdit` tool calls with nothing written yet: a turn that has
+ *     read this much already knows enough to write its first file;
+ *   - more than `maxExploreSinceLastEdit` read/grep calls since the turn's last edit: re-reading
+ *     after writing (the post-compaction pattern) burns context without changing anything;
  *   - past `maxTurnSteps`, a turn may continue only while it is still editing (an edit within
  *     the last `stepGraceAfterEdit` calls), up to `maxTurnSteps * hardStepMultiplier`.
  *
@@ -57,6 +61,7 @@ export class LoopGuard {
   private lastTestStep = 0;
   private graphUsed = false;
   private exploreBeforeGraph = 0;
+  private exploreSinceEdit = 0;
   private readonly seen = new Map<string, number>();
   private readonly fileReads = new Map<string, number>();
 
@@ -82,7 +87,10 @@ export class LoopGuard {
     const cmd = commandOf(input);
 
     const edited = EDIT_TOOLS.has(tool) || SHELL_WRITE.test(cmd);
-    if (edited) this.lastEditStep = this.steps;
+    if (edited) {
+      this.lastEditStep = this.steps;
+      this.exploreSinceEdit = 0;
+    }
 
     if (GRAPH_CMD.test(cmd)) this.graphUsed = true;
     if (!this.graphUsed && l.maxExploreBeforeGraph > 0 && (EXPLORE_TOOLS.has(tool) || EXPLORE_CMD.test(cmd))) {
@@ -91,6 +99,22 @@ export class LoopGuard {
         return `${this.exploreBeforeGraph} grep/read calls before any graphify call (limit ${l.maxExploreBeforeGraph}). ` +
           `Graph first: graphify explain "file::symbol" (or graphify query "...") gives exact file:line in one step; ` +
           `then read only those lines`;
+      }
+    }
+
+    // First-write guard: reading is not progress on its own. Before the turn's first edit the
+    // only excuse for many calls is that they are about to become a write; after it, reads
+    // without a following edit are the compaction loop.
+    if (l.maxStepsBeforeFirstEdit > 0 && this.lastEditStep === 0 && this.steps > l.maxStepsBeforeFirstEdit) {
+      return `FIRST_WRITE: ${this.steps} calls and nothing written (limit ${l.maxStepsBeforeFirstEdit}). ` +
+        `Write the first file now from what you already know`;
+    }
+    const exploring = (EXPLORE_TOOLS.has(tool) || EXPLORE_CMD.test(cmd)) && !GRAPH_CMD.test(cmd);
+    if (this.lastEditStep > 0) {
+      if (exploring) this.exploreSinceEdit += 1;
+      if (l.maxExploreSinceLastEdit > 0 && this.exploreSinceEdit > l.maxExploreSinceLastEdit) {
+        return `FIRST_WRITE: ${this.exploreSinceEdit} read/grep calls since the last edit (limit ${l.maxExploreSinceLastEdit}). ` +
+          `Write the next change now; do not re-read`;
       }
     }
 

@@ -22,6 +22,11 @@ import type { Usage } from "./types.js";
  *     "maxTestRuns": 12,              // test runs in one turn
  *     "maxSameFileReads": 30,         // reads of one file in one turn
  *     "maxExploreBeforeGraph": 8,     // grep/read calls before the first graphify call (0 = off)
+ *     "maxStepsBeforeFirstEdit": 40,  // tool calls in a turn with nothing written yet (0 = off)
+ *     "maxExploreSinceLastEdit": 60,  // read/grep calls after the turn's last edit (0 = off)
+ *     "autoNudges": 2,                // automatic follow-up turns after a FIRST_WRITE stop
+ *     "maxProviderRetries": 3,        // provider retries (session.status retry) before the turn is stopped; 0 = wait forever
+ *     "maxStepContextTokens": 0,      // one step's context (input + cache read); 0 = off
  *     "stepGraceAfterEdit": 40,       // past maxTurnSteps, keep going while an edit is this recent...
  *     "hardStepMultiplier": 2,        // ...up to maxTurnSteps x this
  *     "overrides": [                  // per model, first match wins (substring of "provider/model")
@@ -45,6 +50,16 @@ export interface Limits {
   maxSameFileReads: number;
   /** grep/read calls allowed before the turn's first graphify call (0 = off). */
   maxExploreBeforeGraph: number;
+  /** Tool calls a turn may make before its first edit or write (0 = off). */
+  maxStepsBeforeFirstEdit: number;
+  /** Read/grep calls allowed after the turn's last edit before it is stopped (0 = off). */
+  maxExploreSinceLastEdit: number;
+  /** Automatic follow-up turns the daemon runs after a FIRST_WRITE stop. */
+  autoNudges: number;
+  /** Provider retry attempts (opencode session.status type "retry") tolerated before the turn is stopped (0 = wait forever). */
+  maxProviderRetries: number;
+  /** One model step's context (input + cache read tokens) above which the turn is stopped (0 = off). */
+  maxStepContextTokens: number;
   /** Past maxTurnSteps, a turn that edited a file within this many calls may continue... */
   stepGraceAfterEdit: number;
   /** ...up to maxTurnSteps times this. */
@@ -60,6 +75,11 @@ export const DEFAULT_LIMITS: Limits = {
   maxTestRuns: 12,
   maxSameFileReads: 30,
   maxExploreBeforeGraph: 8,
+  maxStepsBeforeFirstEdit: 40,
+  maxExploreSinceLastEdit: 60,
+  autoNudges: 2,
+  maxProviderRetries: 3,
+  maxStepContextTokens: 0,
   stepGraceAfterEdit: 40,
   hardStepMultiplier: 2,
 };
@@ -96,6 +116,12 @@ export function loadLimits(model = ""): Limits {
     maxTestRuns: num(file.maxTestRuns) ?? DEFAULT_LIMITS.maxTestRuns,
     maxSameFileReads: num(file.maxSameFileReads) ?? DEFAULT_LIMITS.maxSameFileReads,
     maxExploreBeforeGraph: num(file.maxExploreBeforeGraph) ?? DEFAULT_LIMITS.maxExploreBeforeGraph,
+    maxStepsBeforeFirstEdit: num(file.maxStepsBeforeFirstEdit) ?? DEFAULT_LIMITS.maxStepsBeforeFirstEdit,
+    maxExploreSinceLastEdit: num(file.maxExploreSinceLastEdit) ?? DEFAULT_LIMITS.maxExploreSinceLastEdit,
+    autoNudges: num(file.autoNudges) ?? DEFAULT_LIMITS.autoNudges,
+    maxProviderRetries:
+      num(file.maxProviderRetries) ?? num(env.ORCH_MAX_PROVIDER_RETRIES) ?? DEFAULT_LIMITS.maxProviderRetries,
+    maxStepContextTokens: num(file.maxStepContextTokens) ?? DEFAULT_LIMITS.maxStepContextTokens,
     stepGraceAfterEdit: num(file.stepGraceAfterEdit) ?? DEFAULT_LIMITS.stepGraceAfterEdit,
     hardStepMultiplier: num(file.hardStepMultiplier) ?? DEFAULT_LIMITS.hardStepMultiplier,
   };

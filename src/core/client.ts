@@ -110,4 +110,19 @@ export class DaemonClient {
   close(body: Record<string, unknown>) {
     return this.call("/close", body);
   }
+  grade(body: Record<string, unknown>) {
+    return this.call<{ ok: boolean; sessionId: string; pct: number }>("/grade", body);
+  }
+  progress(body: Record<string, unknown>) {
+    return this.call<{
+      sessionId: string;
+      job: { path: string } | null;
+      items: Array<{ id: string; text: string; score: number; evidence: string[] }>;
+      autoPct: number;
+      grade: { pct: number; note: string; at: number } | null;
+    }>("/progress", body);
+  }
+  program(body: Record<string, unknown>) {
+    return this.call<Record<string, unknown>>("/program", body);
+  }
 }

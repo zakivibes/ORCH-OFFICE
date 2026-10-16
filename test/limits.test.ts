@@ -308,3 +308,113 @@ test("the graph-first rule is satisfied once per session, not every turn", async
   assert.equal((await run(reg, handle.id)).at(-1)?.t, "turn.completed");
   assert.equal((await run(reg, handle.id)).at(-1)?.t, "turn.completed", "second turn needs no new graphify call");
 });
+
+/** Never edits: reads distinct files forever, so every turn stops with FIRST_WRITE. */
+class NeverEditAdapter implements Adapter {
+  readonly id = "opencode" as const;
+  readonly caps = caps;
+  interrupted = 0;
+  turns = 0;
+  prompts: string[] = [];
+  async spawn(): Promise<Handle> {
+    return { tool: "opencode", id: `s-${Math.random()}`, native: "n", cwd: dir, model: "fake", caps };
+  }
+  async *send(_handle: Handle, prompt: string): AsyncGenerator<Event> {
+    this.turns += 1;
+    this.prompts.push(prompt);
+    this.interrupted = 0;
+    for (let i = 0; i < 10_000; i++) {
+      if (this.interrupted) return;
+      yield { t: "tool.call", id: `${this.turns}-${i}`, name: "read", input: { filePath: `/t${this.turns}/f${i}.js` } };
+    }
+  }
+  async interrupt() {
+    this.interrupted += 1;
+  }
+  async close() {}
+}
+
+test("a turn past maxStepsBeforeFirstEdit with nothing written is stopped", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepsBeforeFirstEdit: 5, maxExploreSinceLastEdit: 0 });
+  const calls = Array.from({ length: 8 }, (_, i) => ({ name: "read", input: { filePath: `/f${i}.js` } }));
+  const { events, adapter } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(
+    stop?.t === "error" && stop.kind === "budget" &&
+      /FIRST_WRITE: 6 calls and nothing written \(limit 5\)\. Write the first file now/.test(stop.message),
+  );
+  assert.equal(adapter.interrupted, 1);
+});
+
+test("many read/grep calls after the last edit are stopped", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 60 });
+  const calls = [
+    { name: "edit", input: { filePath: "/a.ts" } },
+    ...Array.from({ length: 70 }, (_, i) => ({ name: "bash", input: { command: `grep -n 'p${i}' lib` } })),
+  ];
+  const { events } = await runScript(calls);
+  const stop = events.at(-1);
+  assert.ok(
+    stop?.t === "error" && stop.kind === "budget" &&
+      /FIRST_WRITE: 61 read\/grep calls since the last edit \(limit 60\)\. Write the next change now/.test(stop.message),
+  );
+});
+
+test("with both first-write limits at 0 long turns are untouched", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0 });
+  const reads = Array.from({ length: 45 }, (_, i) => ({ name: "read", input: { filePath: `/f${i}.js` } }));
+  const greps = Array.from({ length: 45 }, (_, i) => ({ name: "bash", input: { command: `grep -n 'p${i}' lib` } }));
+  const { events } = await runScript([...reads, { name: "edit", input: { filePath: "/a.ts" } }, ...greps]);
+  assert.equal(events.at(-1)?.t, "turn.completed");
+  assert.ok(!events.some((e) => e.t === "error"));
+});
+
+test("a step whose context passes maxStepContextTokens is stopped for rollover", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepContextTokens: 500 });
+  const adapter = new LoopingAdapter({ ...zeroUsage(), inputTokens: 300, cacheReadTokens: 300 });
+  const reg = registryWith(adapter);
+  const { handle } = await reg.open({ tool: "opencode", cwd: dir, roots: [dir] });
+  const events = await run(reg, handle.id);
+  const stop = events.at(-1);
+  assert.ok(
+    stop?.t === "error" && stop.kind === "budget" &&
+      /CONTEXT: step context 600 tokens \(limit 500\)\. Roll over to a fresh session/.test(stop.message),
+  );
+  assert.equal(adapter.interrupted, 1);
+});
+
+test("auto-nudge runs exactly autoNudges extra turns, then stops nudging", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepsBeforeFirstEdit: 3, autoNudges: 2 });
+  const adapter = new NeverEditAdapter();
+  const reg = registryWith(adapter);
+  const notes: string[] = [];
+  reg.on("event", (_id: unknown, ev: Event) => {
+    if (ev.t === "text.delta" && ev.text.startsWith("[orch] auto-nudge")) notes.push(ev.text);
+  });
+  const { handle } = await reg.open({ tool: "opencode", cwd: dir, roots: [dir] });
+  await run(reg, handle.id);
+  assert.equal(adapter.turns, 1);
+  assert.ok(await reg.autoNudge(handle.id), "first nudge runs a follow-up turn");
+  assert.ok(await reg.autoNudge(handle.id), "the nudge turn stopped FIRST_WRITE too, so it is nudged once more");
+  assert.equal(await reg.autoNudge(handle.id), false, "the per-session budget is spent");
+  assert.equal(adapter.turns, 3, "the original turn plus exactly two nudges");
+  assert.deepEqual(notes, ["[orch] auto-nudge 1/2\n", "[orch] auto-nudge 2/2\n"]);
+  assert.ok(adapter.prompts[1]!.startsWith("Continue the same job"));
+  assert.ok(/Write now; do not re-read/.test(adapter.prompts[1]!));
+});
+
+test("a CONTEXT stop is not nudged", async () => {
+  setLimits({ maxTurnSteps: 0, maxSessionReadTokens: 0, maxStepContextTokens: 500, autoNudges: 2 });
+  const adapter = new LoopingAdapter({ ...zeroUsage(), inputTokens: 300, cacheReadTokens: 300 });
+  const reg = registryWith(adapter);
+  const notes: string[] = [];
+  reg.on("event", (_id: unknown, ev: Event) => {
+    if (ev.t === "text.delta" && ev.text.startsWith("[orch] auto-nudge")) notes.push(ev.text);
+  });
+  const { handle } = await reg.open({ tool: "opencode", cwd: dir, roots: [dir] });
+  const events = await run(reg, handle.id);
+  assert.ok(events.at(-1)?.t === "error" && /CONTEXT:/.test((events.at(-1) as { message: string }).message));
+  assert.equal(await reg.autoNudge(handle.id), false, "CONTEXT needs a fresh session, not a nudge");
+  assert.equal(adapter.interrupted, 1, "no extra turn was started");
+  assert.deepEqual(notes, []);
+});

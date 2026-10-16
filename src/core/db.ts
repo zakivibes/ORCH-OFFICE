@@ -58,6 +58,21 @@ export class Store {
         payload TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq);
+
+      CREATE TABLE IF NOT EXISTS jobs (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        text TEXT NOT NULL,
+        items TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS grades (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        pct REAL NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -170,6 +185,48 @@ export class Store {
       at: Number(r.at),
       event: JSON.parse(String(r.payload)) as Event,
     }));
+  }
+
+  setJob(sessionId: string, path: string, text: string, items: string) {
+    this.db
+      .prepare(
+        `INSERT INTO jobs (session_id, path, text, items, created_at) VALUES (?,?,?,?,?)
+         ON CONFLICT(session_id) DO UPDATE SET path=excluded.path, text=excluded.text, items=excluded.items`,
+      )
+      .run(sessionId, path, text, items, Date.now());
+  }
+
+  getJob(sessionId: string): { sessionId: string; path: string; text: string; items: string; createdAt: number } | null {
+    const r = this.db.prepare("SELECT * FROM jobs WHERE session_id=?").get(sessionId) as
+      | Record<string, unknown>
+      | undefined;
+    return r
+      ? {
+          sessionId: String(r.session_id),
+          path: String(r.path),
+          text: String(r.text),
+          items: String(r.items),
+          createdAt: Number(r.created_at),
+        }
+      : null;
+  }
+
+  setGrade(sessionId: string, pct: number, note: string) {
+    this.db
+      .prepare(
+        `INSERT INTO grades (session_id, pct, note, at) VALUES (?,?,?,?)
+         ON CONFLICT(session_id) DO UPDATE SET pct=excluded.pct, note=excluded.note, at=excluded.at`,
+      )
+      .run(sessionId, pct, note, Date.now());
+  }
+
+  getGrade(sessionId: string): { sessionId: string; pct: number; note: string; at: number } | null {
+    const r = this.db.prepare("SELECT * FROM grades WHERE session_id=?").get(sessionId) as
+      | Record<string, unknown>
+      | undefined;
+    return r
+      ? { sessionId: String(r.session_id), pct: Number(r.pct), note: String(r.note ?? ""), at: Number(r.at) }
+      : null;
   }
 
   accumulate(sessionId: string, delta: Usage, costUsd: number) {

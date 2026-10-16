@@ -1,0 +1,29 @@
+JOB L2 (small) — plug the 1-201 curve into the level engine. DONE already: backend/src/services/levelCurve.js (build(track,cfg)
+-> T[0..201], levelFor(T,total), tierIndex, DEFAULTS, CAP=201) + tests/levels_curve.test.js. Read levelCurve.js first (144 lines).
+DO, only in these files:
+ 1) backend/src/services/levelService.js (128 lines, read it whole once): LEVEL_CAP = 201. Add a per-track table cache:
+    tableFor(track) builds from rule keys (step 2) via levelCurve.build and caches; invalidate() clears it. Keep the existing
+    exported functions working, with an optional `track` argument ('wealth'|'charm'|'generosity'; default 'wealth'):
+    levelForSpend(total, track) -> levelCurve.levelFor(T,total); spendForLevel(level, track) -> T[level];
+    spendForNextLevel(level, track) -> T[level+1] (or T[201] at cap); progressForLevel / levelBand use the table. Existing callers that
+    pass a numeric divisor as the 2nd argument: if typeof arg is a number, treat it as track 'wealth' (ignore the divisor).
+    Export also: tableFor, invalidate, CAP.
+ 2) Rule keys (group 'levels') seeded like level_spend_divisor_* in backend/src/services/moneyRegistry.js (grep -n
+    "level_spend_divisor_wealth" to find the seed list ~line 419; add right after it, same shape, ar+en labels):
+    level_wealth_early_step=1000, level_wealth_total_201=6000000000, level_charm_early_step=500, level_charm_total_201=4000000000,
+    level_generosity_early_step=500, level_generosity_total_201=4000000000. These are NOT money values: is_placeholder 0. levelService
+    reads them with rulesEngine.number(key, default) (lazy require like ruleDivisor does now).
+ 3) Invalidate the cache when a 'levels' rule is saved: backend/src/services/ruleWriteService.js writeRule() L100 — after a successful
+    write of a key starting with 'level_', call require('./levelService').invalidate() (one small insertion).
+ 4) Replace the hard 99 caps with levelService.LEVEL_CAP: grep -n "99" in backend/src/controllers/meController.js,
+    backend/src/services/badgeAwardService.js (~L115), backend/src/controllers/adminController.js (level validation),
+    backend/src/controllers/authController.js — change only level caps, nothing else.
+ 5) Test backend/tests/levels_engine_201.test.js (style of tests/levels_curve.test.js; DB_PATH scratch copy like other tests that
+    touch rules): levelForSpend(6e9,'wealth')=201; levelForSpend(0)=1; levelBand cap=201; saving rule level_charm_total_201 via
+    writeRule changes levelForSpend for charm (cache invalidated); old numeric-divisor call still returns a level.
+    Register tests/levels_curve.test.js and tests/levels_engine_201.test.js at the END of the "test" chain in backend/package.json
+    (re-read the line right before editing; other workers edit it).
+Do NOT change which activity feeds which level (that is job L3) and do not touch giftController.js / rechargeLevelService.js.
+Checks: node tests/levels_engine_201.test.js | tail -2; JWT_SECRET="test-secret-key-for-local-suite-0123456789" npm test 2>&1 | tail -3 (exit 0;
+fix only tests that assert the old 99 cap, and say which).
+FIRST command: graphify explain "levelService.js::levelForSpend" . Write early. Report files + real last lines.

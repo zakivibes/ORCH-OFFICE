@@ -10,6 +10,9 @@ import { Store } from "./db.js";
 import { Registry, type OpenArgs } from "./registry.js";
 import { Policy, type NarrowRequest } from "../permissions/policy.js";
 import type { Event, ToolId } from "./types.js";
+import { scoreSession } from "./progress.js";
+import { loadPrograms, savePrograms, addProgram, link, setWeight, findProgram, programPct } from "./programs.js";
+import { readTokens } from "./limits.js";
 
 const HOME = join(homedir(), ".orchestrator");
 const PIDFILE = join(HOME, "daemon.json");
@@ -219,6 +222,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
         cwd: String(body.cwd),
         roots: (body.roots as string[]) ?? [String(body.cwd)],
         label: body.label as string | undefined,
+        job: body.job as string | undefined,
         model: body.model as string | undefined,
         narrow: body.narrow as NarrowRequest | undefined,
         worktree: body.worktree === true,
@@ -245,7 +249,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
       }
       const requested = Number(body.waitMs ?? 0);
       const waitMs = Math.min(requested > 0 ? requested : MAX_WAIT_MS, MAX_WAIT_MS);
-      const events = await collectBounded(ctx, sessionId, prompt, waitMs);
+      const events = await collectBounded(ctx, sessionId, prompt, waitMs, body.job as string | undefined);
       return json(res, 200, { events, log: writeLog(sessionId, events) });
     }
 
@@ -340,6 +344,72 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
     case "/cost":
       return json(res, 200, { rows: ctx.store.totalsByTool() });
 
+    case "/grade": {
+      const sessionId = String(body.sessionId);
+      if (!ctx.store.getSession(sessionId)) return json(res, 404, { error: "no such session" });
+      const pct = Number(body.pct);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) return json(res, 400, { error: "pct must be 0..100" });
+      ctx.store.setGrade(sessionId, pct / 100, String(body.note ?? ""));
+      return json(res, 200, { ok: true, sessionId, pct });
+    }
+
+    case "/progress": {
+      const sessionId = String(body.sessionId);
+      if (!ctx.store.getSession(sessionId)) return json(res, 404, { error: "no such session" });
+      const job = ctx.store.getJob(sessionId);
+      const progress = scoreSession(ctx.store, sessionId);
+      const grade = ctx.store.getGrade(sessionId);
+      return json(res, 200, {
+        sessionId,
+        job: job ? { path: job.path } : null,
+        items: progress.items,
+        autoPct: progress.autoPct,
+        grade: grade ? { pct: grade.pct, note: grade.note, at: grade.at } : null,
+      });
+    }
+
+    case "/program": {
+      const action = String(body.action ?? "show");
+      const programs = loadPrograms();
+      const id = String(body.id ?? "");
+      try {
+        if (action === "add") {
+          addProgram(programs, id, String(body.name ?? id));
+          savePrograms(programs);
+          return json(res, 200, { ok: true, id, name: String(body.name ?? id) });
+        }
+        if (action === "link") {
+          link(programs, id, String(body.job), String(body.sessionId));
+          savePrograms(programs);
+          return json(res, 200, { ok: true, id, job: String(body.job), sessionId: String(body.sessionId) });
+        }
+        if (action === "weight") {
+          setWeight(programs, id, String(body.job), Number(body.weight));
+          savePrograms(programs);
+          return json(res, 200, { ok: true, id, job: String(body.job), weight: Number(body.weight) });
+        }
+        // show
+        const pctOf = (sessionId: string): number | null => {
+          const g = ctx.store.getGrade(sessionId);
+          if (g) return g.pct;
+          if (!ctx.store.getSession(sessionId)) return null;
+          return scoreSession(ctx.store, sessionId).autoPct;
+        };
+        const tokensOf = (sessionId: string): number => {
+          const s = ctx.store.getSession(sessionId);
+          return s ? readTokens(s.totals) : 0;
+        };
+        if (id) {
+          const program = findProgram(programs, id);
+          if (!program) return json(res, 404, { error: `no program "${id}"` });
+          return json(res, 200, { program, ...programPct(program, pctOf, tokensOf) });
+        }
+        return json(res, 200, { programs: programs.programs });
+      } catch (err) {
+        return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     case "/models": {
       const models = await listModels();
       const filter = typeof body.filter === "string" ? body.filter.toLowerCase() : "";
@@ -374,12 +444,15 @@ const MAX_WAIT_MS = Number(process.env.ORCH_MAX_WAIT_MS ?? 240_000);
  * what has arrived so far plus a "still running" note; the turn finishes on
  * its own and its events land in the store for orch_stream.
  */
-async function collectBounded(ctx: Ctx, sessionId: string, prompt: string, waitMs: number): Promise<Event[]> {
+async function collectBounded(ctx: Ctx, sessionId: string, prompt: string, waitMs: number, job?: string): Promise<Event[]> {
   const events: Event[] = [];
   running.add(sessionId);
   const done = (async () => {
     try {
-      for await (const ev of ctx.registry.send({ sessionId, prompt })) events.push(ev);
+      for await (const ev of ctx.registry.send({ sessionId, prompt, job })) events.push(ev);
+      // A FIRST_WRITE stop gets automatic follow-up turn(s) before the session is marked
+      // idle again, so orch_send keeps reporting the session as busy until the nudge ends.
+      await ctx.registry.autoNudge(sessionId);
     } catch (e) {
       events.push({ t: "error", kind: "crash", message: String((e as Error)?.message ?? e) });
     } finally {

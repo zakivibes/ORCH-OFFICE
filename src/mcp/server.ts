@@ -33,6 +33,7 @@ const TOOLS = [
         prompt: { type: "string", description: "First turn" },
         cwd: { type: "string", description: "Defaults to the Claude Code project directory." },
         label: { type: "string" },
+        job: { type: "string", description: "Path to a job file; its text and code-graph anchors are added to the prompt." },
         model: {
           type: "string",
           description:
@@ -62,6 +63,7 @@ const TOOLS = [
       properties: {
         sessionId: { type: "string" },
         prompt: { type: "string" },
+        job: { type: "string", description: "Path to a job file; its text and code-graph anchors are added to the prompt." },
         waitMs: { type: "number", description: "Default 600000." },
       },
       required: ["sessionId", "prompt"],
@@ -167,6 +169,47 @@ const TOOLS = [
     description: "Token and cost totals per tool.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "orch_grade",
+    description:
+      "Set the coordinator's accepted % for a session (ground truth for the job it ran). Shows auto % next to it in orch_progress.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        pct: { type: "number", description: "0..100" },
+        note: { type: "string", description: "Why this grade." },
+      },
+      required: ["sessionId", "pct"],
+    },
+  },
+  {
+    name: "orch_progress",
+    description:
+      "How much of its job a session has done: per-item score with the evidence (todos, writes, passing tests, report) and the automatic %, plus the grade if you set one.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" } },
+      required: ["sessionId"],
+    },
+  },
+  {
+    name: "orch_program",
+    description:
+      "Group job sessions into a program (e.g. 'Levels engine 1-201') and see its overall % and tokens spent. Actions: add {id,name}, link {id,job,sessionId}, weight {id,job,weight}, show {id?}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["add", "link", "weight", "show"] },
+        id: { type: "string", description: "Program id." },
+        name: { type: "string", description: "Program name (add)." },
+        job: { type: "string", description: "Job file path (link/weight)." },
+        sessionId: { type: "string", description: "Session to link (link)." },
+        weight: { type: "number", description: "Item weight (weight)." },
+      },
+      required: ["action"],
+    },
+  },
 ] as const;
 
 function text(s: string) {
@@ -242,6 +285,7 @@ export async function startMcpServer(): Promise<void> {
               roots: rootList,
               prompt: String(a.prompt ?? ""),
               label: a.label,
+              job: a.job,
               model: a.model,
               narrow: { deny: a.deny, disableTools: a.disableTools },
               worktree: a.worktree === true,
@@ -268,6 +312,7 @@ export async function startMcpServer(): Promise<void> {
             r = await client.send({
               sessionId: String(a.sessionId),
               prompt: String(a.prompt ?? ""),
+              job: a.job,
               waitMs: Number(a.waitMs ?? 600_000),
             });
           } finally {
@@ -400,6 +445,73 @@ export async function startMcpServer(): Promise<void> {
                 .join("\n") || "(no usage yet)",
             ),
           );
+        }
+
+        case "orch_grade": {
+          const r = await client.grade({
+            sessionId: String(a.sessionId),
+            pct: Number(a.pct),
+            note: a.note ? String(a.note) : "",
+          });
+          return text(`graded session ${r.sessionId}: ${r.pct}%`);
+        }
+
+        case "orch_progress": {
+          const r = await client.progress({ sessionId: String(a.sessionId) });
+          if (!r.job) return text(`session ${r.sessionId} has no stored job.`);
+          const pct = (n: number) => `${Math.round(n * 100)}%`;
+          const body = r.items
+            .map((i) => {
+              const ev = i.evidence.length ? ` — ${i.evidence.join("; ")}` : "";
+              return `${i.id}) ${pct(i.score)} ${i.text.split("\n")[0]?.slice(0, 90)}${ev}`;
+            })
+            .join("\n");
+          const grade = r.grade ? `  grade: ${pct(r.grade.pct)} (${r.grade.note || "no note"})` : "  grade: none";
+          return text(
+            truncate(
+              `job ${r.job.path}\nauto: ${pct(r.autoPct)}\n${grade}\n\n${body || "(no items parsed)"}`,
+            ),
+          );
+        }
+
+        case "orch_program": {
+          const action = String(a.action ?? "show");
+          if (action === "add") {
+            const r = await client.program({ action, id: String(a.id), name: a.name ? String(a.name) : String(a.id) });
+            return text(`program ${r.id} added`);
+          }
+          if (action === "link") {
+            const r = await client.program({
+              action,
+              id: String(a.id),
+              job: String(a.job),
+              sessionId: String(a.sessionId),
+            });
+            return text(`linked session ${r.sessionId} to ${r.id} (job ${r.job})`);
+          }
+          if (action === "weight") {
+            const r = await client.program({
+              action,
+              id: String(a.id),
+              job: String(a.job),
+              weight: Number(a.weight),
+            });
+            return text(`${r.id} ${r.job} weight = ${r.weight}`);
+          }
+          const r = await client.program(a.id ? { action: "show", id: String(a.id) } : { action: "show" });
+          const render = (p: Record<string, any>, pct?: number, tokensSpent?: number) => {
+            const items = (p.items as Array<Record<string, any>>)
+              .map((i) => `  ${i.job} w=${i.weight} sessions=[${(i.sessions as string[]).join(", ")}]`)
+              .join("\n");
+            const head = pct === undefined ? p.name : `${p.name}  done=${pct}  tokens=${tokensSpent}`;
+            return `${p.id} ${head}\n${items || "  (no linked sessions)"}`;
+          };
+          if (r.program) {
+            const p = r.program as Record<string, any>;
+            return text(truncate(render(p, r.pct as number | undefined, r.tokensSpent as number | undefined)));
+          }
+          const programs = (r.programs as Array<Record<string, any>>) ?? [];
+          return text(truncate(programs.map((p) => render(p)).join("\n\n") || "(no programs)"));
         }
 
         default:

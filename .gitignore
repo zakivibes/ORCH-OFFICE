@@ -10,3 +10,4 @@ opencode.json
 .orchestrator/
 .orch/
 .DS_Store
+graphify-out/

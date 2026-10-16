@@ -8,6 +8,12 @@ import { AgyAdapter } from "../adapters/agy.js";
 import { OpencodeAdapter } from "../adapters/opencode.js";
 import { fmtTokens, loadLimits, readTokens } from "./limits.js";
 import { LoopGuard } from "./loopGuard.js";
+
+/** The prompt for an automatic follow-up turn after a FIRST_WRITE stop. */
+const NUDGE_PROMPT =
+  "Continue the same job. Write now; do not re-read files you already read. If an item is done, " +
+  "move to the next one. End with Assumptions + files + real last test lines.";
+import { agentsMdWarning, buildAnchorPack, jobBasename, readJobText } from "./anchors.js";
 import {
   addUsage,
   zeroUsage,
@@ -43,12 +49,16 @@ export interface OpenArgs {
   narrow?: NarrowRequest;
   /** Create an isolated git worktree and run the agent inside it. */
   worktree?: boolean;
+  /** Path to a job file; its text and code-graph anchors are added to the first prompt. */
+  job?: string;
 }
 
 export interface SendArgs {
   sessionId: string;
   prompt: string;
   signal?: AbortSignal;
+  /** Path to a job file (relative to the session cwd or absolute). */
+  job?: string;
 }
 
 /**
@@ -67,6 +77,12 @@ export class Registry extends EventEmitter {
   public sessionGroups = new Map<string, string>();
   /** Sessions that have called graphify, so the graph-first rule asks for it once per session. */
   private graphSessions = new Set<string>();
+  /** The stop reason of the session's last turn, when a limit stopped it ("" otherwise). */
+  private lastStops = new Map<string, string>();
+  /** Automatic FIRST_WRITE follow-ups already spent per session (see autoNudge). */
+  private nudges = new Map<string, number>();
+  /** Job paths stashed by open() and consumed by the session's first send(). */
+  private sessionJobs = new Map<string, string>();
 
   constructor(readonly store: Store) {
     super();
@@ -165,6 +181,7 @@ export class Registry extends EventEmitter {
     this.handles.set(handle.id, handle);
     if (group) this.sessionGroups.set(handle.id, group.name);
     if (worktree) this.worktreeFor.set(handle.id, worktree);
+    if (args.job) this.sessionJobs.set(handle.id, args.job);
     this.store.updateNative(handle.id, handle.native, handle.model);
 
     this.emit("session", session);
@@ -215,6 +232,26 @@ export class Registry extends EventEmitter {
       return;
     }
 
+    // Job + anchor pack: prepend the job file's text and graphify anchors so
+    // the worker starts at exact lines (graph-first rule satisfied by the pack).
+    let prompt = args.prompt;
+    const jobPath = args.job ?? this.sessionJobs.get(args.sessionId);
+    this.sessionJobs.delete(args.sessionId);
+    if (jobPath) {
+      const warning = agentsMdWarning(handle.cwd);
+      if (warning) yield { t: "text.delta", text: `[orch] ${warning}\n` };
+      const jobText = readJobText(handle.cwd, jobPath);
+      if (jobText) {
+        const pack = await buildAnchorPack(handle.cwd, jobText);
+        if (pack) this.graphSessions.add(args.sessionId);
+        prompt =
+          `${args.prompt}\n\n## Job (${jobBasename(jobPath)})\n${jobText}\n\n` +
+          `## Anchors (from the code graph — start here, graph-first rule satisfied)\n${pack}`;
+      } else {
+        yield { t: "text.delta", text: `[orch] job file not readable: ${jobPath}\n` };
+      }
+    }
+
     const stored = this.store.getSession(args.sessionId);
     let groupName = this.sessionGroups.get(args.sessionId);
     let group = groupName ? getGroups().find((g) => g.name === groupName) : null;
@@ -256,7 +293,7 @@ export class Registry extends EventEmitter {
       };
     }
 
-    const turnId = this.store.startTurn(args.sessionId, args.prompt);
+    const turnId = this.store.startTurn(args.sessionId, prompt);
     let usage = zeroUsage();
     let costUsd = 0;
     let resultText = "";
@@ -265,18 +302,32 @@ export class Registry extends EventEmitter {
     // per-step deltas (usage.step), opencode a running total (usage.progress).
     let stepSum = zeroUsage();
     let progress = zeroUsage();
+    // Context watchdog: one step's context is input + cache read of THAT step. agy's usage.step
+    // carries it directly; opencode's progress is cumulative, so keep the previous progress and
+    // take the delta (fall back to the last known step when the delta is not meaningful).
+    let stepContext = 0;
+    let lastStepRead = 0;
     const guard = new LoopGuard(limits, this.graphSessions.has(args.sessionId));
     let stopReason = "";
     let lastError: Event | null = null;
 
-    for await (const ev of adapter.send(handle, args.prompt, args.signal)) {
+    for await (const ev of adapter.send(handle, prompt, args.signal)) {
       this.store.appendEvent(args.sessionId, ev);
       this.emit("event", args.sessionId, ev);
 
       if (ev.t === "text.delta") resultText += ev.text;
       if (ev.t === "tool.call") stopReason = guard.onToolCall(ev.name, ev.input);
-      if (ev.t === "usage.step") stepSum = addUsage(stepSum, ev.usage);
-      if (ev.t === "usage.progress") progress = ev.usage;
+      if (ev.t === "usage.step") {
+        stepSum = addUsage(stepSum, ev.usage);
+        lastStepRead = ev.usage.inputTokens + ev.usage.cacheReadTokens;
+        stepContext = lastStepRead;
+      }
+      if (ev.t === "usage.progress") {
+        const deltaRead =
+          ev.usage.inputTokens - progress.inputTokens + (ev.usage.cacheReadTokens - progress.cacheReadTokens);
+        stepContext = deltaRead > 0 ? deltaRead : lastStepRead;
+        progress = ev.usage;
+      }
       if (ev.t === "turn.completed") {
         usage = ev.usage;
         costUsd = ev.costUsd ?? 0;
@@ -291,6 +342,8 @@ export class Registry extends EventEmitter {
       const turnRead = Math.max(readTokens(stepSum), readTokens(progress));
       if (stopReason) {
         /* set by the loop guard on this tool call */
+      } else if (limits.maxStepContextTokens > 0 && stepContext > limits.maxStepContextTokens) {
+        stopReason = `CONTEXT: step context ${fmtTokens(stepContext)} tokens (limit ${fmtTokens(limits.maxStepContextTokens)}). Roll over to a fresh session`;
       } else if (limits.maxTurnReadTokens > 0 && turnRead > limits.maxTurnReadTokens) {
         stopReason = `turn stopped after reading ${fmtTokens(turnRead)} tokens (limit ${fmtTokens(limits.maxTurnReadTokens)})`;
       } else if (
@@ -312,12 +365,14 @@ export class Registry extends EventEmitter {
         };
         this.store.appendEvent(args.sessionId, stop);
         this.emit("event", args.sessionId, stop);
+        this.lastStops.set(args.sessionId, stopReason);
         yield stop;
         break;
       }
     }
 
     if (guard.usedGraph) this.graphSessions.add(args.sessionId);
+    if (!stopReason) this.lastStops.delete(args.sessionId);
 
     // A turn that never completed (stopped, errored, aborted) still consumed tokens: record what
     // was seen so the session totals and the budget stay honest.
@@ -331,6 +386,31 @@ export class Registry extends EventEmitter {
         recordQuotaError(group.name, lastError.message);
       }
     }
+  }
+
+  /**
+   * One automatic follow-up turn after a FIRST_WRITE stop, so a session that only read does not
+   * wait for the coordinator to tell it to write. The daemon calls this right after send finishes
+   * (while the session is still marked running). At most `autoNudges` per session; CONTEXT stops
+   * are never nudged — they need a fresh session, which the rollover hand-off handles.
+   * Returns whether a nudge turn was started.
+   */
+  async autoNudge(sessionId: string): Promise<boolean> {
+    const stop = this.lastStops.get(sessionId) ?? "";
+    if (!stop.startsWith("FIRST_WRITE:")) return false;
+    this.lastStops.delete(sessionId);
+    const stored = this.store.getSession(sessionId);
+    const limits = loadLimits(stored?.model ?? "");
+    const used = this.nudges.get(sessionId) ?? 0;
+    if (limits.autoNudges <= 0 || used >= limits.autoNudges) return false;
+    this.nudges.set(sessionId, used + 1);
+    const note: Event = { t: "text.delta", text: `[orch] auto-nudge ${used + 1}/${limits.autoNudges}\n` };
+    this.store.appendEvent(sessionId, note);
+    this.emit("event", sessionId, note);
+    for await (const _ev of this.send({ sessionId, prompt: NUDGE_PROMPT })) {
+      /* the nudge turn persists and re-broadcasts its own events */
+    }
+    return true;
   }
 
   handleFor(id: string): Handle | null {
@@ -352,6 +432,8 @@ export class Registry extends EventEmitter {
     this.policies.delete(sessionId);
     this.handles.delete(sessionId);
     this.sessionGroups.delete(sessionId);
+    this.nudges.delete(sessionId);
+    this.lastStops.delete(sessionId);
   }
 
   async closeAll(): Promise<void> {
