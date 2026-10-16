@@ -28,9 +28,9 @@ function writeLimits(l: Record<string, number>) {
  * opencode 1.19 API (/global/health, /session, SSE /event, prompt_async,
  * abort, delete) to drive OpencodeAdapter through a fake event stream.
  */
-const fakeBin = join(dir, "fake-opencode.mjs");
+const fakeBinScript = join(dir, "fake-opencode.mjs");
 writeFileSync(
-  fakeBin,
+  fakeBinScript,
   [
     "#!/usr/bin/env node",
     'import http from "node:http";',
@@ -85,7 +85,12 @@ writeFileSync(
     "",
   ].join("\n"),
 );
-chmodSync(fakeBin, 0o755);
+chmodSync(fakeBinScript, 0o755);
+let fakeBin = fakeBinScript;
+if (process.platform === "win32") {
+  fakeBin = join(dir, "fake-opencode.cmd");
+  writeFileSync(fakeBin, `@node "${fakeBinScript}" %*\r\n`);
+}
 
 const retryStatus = (attempt: number, message: string) => ({
   type: "session.status",
