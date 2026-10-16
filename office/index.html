@@ -708,6 +708,20 @@ async function submitGrade(id) {
   } catch (e) { toast('❌ grade failed: ' + e.message); }
 }
 
+// One short word for why a session stopped (the full text is the cell's tooltip).
+function stopTag(m) {
+  const t = String(m || '');
+  if (!t) return '—';
+  if (/FIRST_WRITE/.test(t)) return 'no writes';
+  if (/CONTEXT/.test(t)) return 'context';
+  if (/quota|rate/i.test(t)) return 'quota';
+  if (/same .* call/.test(t)) return 'repeat';
+  if (/graphify/.test(t)) return 'no graph';
+  if (/background|wait/i.test(t)) return 'bg wait';
+  if (/budget/i.test(t)) return 'budget';
+  return 'error';
+}
+
 // The Job tab: checklist with per-item evidence, auto vs accepted, grade input, thrift metrics.
 function jobTabBody(w) {
   const jd = refreshJob(w.id);
@@ -742,7 +756,7 @@ function jobTabBody(w) {
   const nbPart = nb ? `<div class="sec">Hand-off · ${nb.earlier.length} earlier session${nb.earlier.length === 1 ? '' : 's'}</div>
     <div class="mrow" title="Tool calls this session made before its first edit. Lower is better; a hand-off should bring it under 10."><span>Calls before first edit</span><b style="color:${nb.self.callsBeforeFirstEdit == null ? '#ff6b6b' : nb.self.callsBeforeFirstEdit <= 10 ? '#3ddc84' : nb.self.callsBeforeFirstEdit <= 30 ? '#ffb020' : '#ff6b6b'}">${nb.self.callsBeforeFirstEdit == null ? 'no edit yet' : nb.self.callsBeforeFirstEdit}</b></div>
     <div class="mrow" title="Files this session read that an earlier session of the same job had already read"><span>Files re-read from earlier sessions</span><b style="color:${nb.self.reReads === 0 ? '#3ddc84' : '#ffb020'}">${nb.self.reReads} of ${nb.self.reads}</b></div>
-    ${nb.earlier.length ? `<div style="overflow-x:auto"><table class="grid"><thead><tr><th>Earlier session</th><th>Calls</th><th>1st edit</th><th>Edits</th><th>Why it stopped</th></tr></thead><tbody>${nb.earlier.map((e) => `<tr><td title="${esc(e.model)}">${esc(String(e.label).replace(/^(flash|argon|qwen)-/, '$1·').slice(0, 22))}</td><td>${e.calls}</td><td>${e.callsBeforeFirstEdit == null ? '—' : '@' + e.callsBeforeFirstEdit}</td><td>${e.edits}</td><td title="${esc((e.stops || []).join(' | '))}">${esc(String((e.stops || [])[e.stops.length - 1] || '—').slice(0, 60))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="hint">First session of this job: nothing to hand off.</div>'}
+    ${nb.earlier.length ? `<div style="overflow-x:auto"><table class="grid"><thead><tr><th>Earlier session</th><th>Calls</th><th>1st edit</th><th>Edits</th><th>Why it stopped</th></tr></thead><tbody>${nb.earlier.map((e) => `<tr><td title="${esc(e.model)}">${esc(String(e.label).replace(/^(flash|argon|qwen)-/, '$1·').slice(0, 22))}</td><td>${e.calls}</td><td>${e.callsBeforeFirstEdit == null ? '—' : '@' + e.callsBeforeFirstEdit}</td><td>${e.edits}</td><td title="${esc((e.stops || []).join(' | '))}">${esc(stopTag((e.stops || [])[e.stops.length - 1]))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="hint">First session of this job: nothing to hand off.</div>'}
     ${nb.handoff ? `<details style="margin-top:6px"><summary class="hint" style="cursor:pointer">hand-off the worker received (${nb.handoff.length} chars)</summary><pre>${esc(nb.handoff)}</pre></details>` : ''}` : '';
   const m = jd.metrics || {};
   const turns = (m.perTurn || []).map((p) => `<tr><td>${p.n}</td><td>${p.calls}</td><td>${p.edits}</td><td>${p.explores}</td>` +
