@@ -66,6 +66,9 @@ function signature(name: string, input: unknown): string | null {
   // agy reports view_file without its line range, so paging through one big file in ranges
   // would look like the identical call; same-file reads have their own rule.
   if (READ_TOOLS.has(name)) return null;
+  // agy reports a file edit with only its TargetFile, so successive edits to one file look identical;
+  // a stuck edit loop shows up as no progress elsewhere (first-write and step limits), not here.
+  if (EDIT_TOOLS.has(name)) return null;
   const { description: _d, workdir: _w, timeout: _t, ...rest } = input as Record<string, unknown>;
   return `${name} ${JSON.stringify(rest)}`;
 }

@@ -444,3 +444,9 @@ test("loop guard: agy exploring with view_file counts toward the first-write lim
   assert.equal(g.onToolCall("view_file", view), "");
   assert.match(g.onToolCall("view_file", view), /graphify/);
 });
+
+test("loop guard: many agy edits to one file are progress, not an identical-call loop", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxRepeatCalls: 3, maxExploreBeforeGraph: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0 });
+  const edit = { tool_info: { name: "replace_file_content", parameters: { TargetFile: "/x/panel.dart" } } };
+  for (let i = 0; i < 10; i++) assert.equal(g.onToolCall("replace_file_content", edit), "");
+});
