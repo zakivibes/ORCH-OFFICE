@@ -29,23 +29,34 @@ const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch"
   // agy names: its file writes and generated images are progress too.
   "write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "generate_image"]);
 const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
-const READ_TOOLS = new Set(["read", "view"]);
+const READ_TOOLS = new Set(["read", "view", "view_file"]);
 /** A shell command that writes a file: heredoc/redirect, sed -i, or a script that opens a file for writing. */
 const SHELL_WRITE = /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi|open\([^)]*['"]w['"]|\.write(_text)?\(|writeFileSync/;
-const EXPLORE_TOOLS = new Set(["read", "view", "grep", "glob", "list", "ls"]);
+const EXPLORE_TOOLS = new Set(["read", "view", "grep", "glob", "list", "ls",
+  "view_file", "list_dir", "grep_search", "find_by_name"]);
 const EXPLORE_CMD = /^\s*(cd [^;&]+(&&|;)\s*)?(rtk )?(grep|rg|sed -n|cat|head|tail|find|ls|wc)\b/;
 const GRAPH_CMD = /\bgraphify (explain|query|path)\b/;
 
-function commandOf(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
+/** agy wraps a call's arguments as `{tool_info: {name, parameters}}`; the rules read the arguments. */
+function argsOf(input: unknown): Record<string, unknown> | null {
+  if (!input || typeof input !== "object") return null;
   const i = input as Record<string, unknown>;
-  return typeof i.command === "string" ? i.command : "";
+  const info = i.tool_info as Record<string, unknown> | undefined;
+  if (info && info.parameters && typeof info.parameters === "object") return info.parameters as Record<string, unknown>;
+  return i;
+}
+
+function commandOf(input: unknown): string {
+  const i = argsOf(input);
+  if (!i) return "";
+  const c = i.command ?? i.CommandLine;
+  return typeof c === "string" ? c : "";
 }
 
 function fileOf(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
-  const i = input as Record<string, unknown>;
-  const f = i.filePath ?? i.file_path ?? i.path;
+  const i = argsOf(input);
+  if (!i) return "";
+  const f = i.filePath ?? i.file_path ?? i.path ?? i.AbsolutePath;
   return typeof f === "string" ? f : "";
 }
 
@@ -54,7 +65,7 @@ function signature(name: string, input: unknown): string | null {
   if (!input || typeof input !== "object" || Object.keys(input).length === 0) return null;
   // agy reports view_file without its line range, so paging through one big file in ranges
   // would look like the identical call; same-file reads have their own rule.
-  if (READ_TOOLS.has(name) || name === "view_file") return null;
+  if (READ_TOOLS.has(name)) return null;
   const { description: _d, workdir: _w, timeout: _t, ...rest } = input as Record<string, unknown>;
   return `${name} ${JSON.stringify(rest)}`;
 }
@@ -144,7 +155,8 @@ export class LoopGuard {
       }
     }
 
-    const file = READ_TOOLS.has(tool) ? fileOf(input) : "";
+    // agy's view_file carries no line range, so paging one file looks like re-reading it; only count real reads.
+    const file = READ_TOOLS.has(tool) && tool !== "view_file" ? fileOf(input) : "";
     if (file && l.maxSameFileReads > 0) {
       const n = (this.fileReads.get(file) ?? 0) + 1;
       this.fileReads.set(file, n);

@@ -425,3 +425,22 @@ test("loop guard: paging one file with view_file is not an identical-call loop",
   const input = { tool_info: { name: "view_file", parameters: { AbsolutePath: "/x/big.dart" } } };
   for (let i = 0; i < 10; i++) assert.equal(g.onToolCall("view_file", input), "");
 });
+
+test("loop guard: reads agy-wrapped run_command arguments (shell writes, tests, graph)", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxStepsBeforeFirstEdit: 3, maxExploreBeforeGraph: 0, maxExploreSinceLastEdit: 0, maxTurnSteps: 0 });
+  const cmd = (c: string) => ({ tool_info: { name: "run_command", parameters: { CommandLine: c } } });
+  assert.equal(g.onToolCall("run_command", cmd("grep -n foo a.dart")), "");
+  assert.equal(g.onToolCall("run_command", cmd("sed -i '' 's/a/b/' a.dart")), "", "a shell write is an edit");
+  for (let i = 0; i < 5; i++) assert.equal(g.onToolCall("run_command", cmd(`sed -n '${i},9p' a.dart`)), "");
+  assert.equal(g.usedGraph, false);
+  g.onToolCall("run_command", cmd('graphify query "x"'));
+  assert.equal(g.usedGraph, true);
+});
+
+test("loop guard: agy exploring with view_file counts toward the first-write limit", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxStepsBeforeFirstEdit: 0, maxExploreBeforeGraph: 2, maxExploreSinceLastEdit: 0, maxTurnSteps: 0 });
+  const view = { tool_info: { name: "view_file", parameters: { AbsolutePath: "/x/a.dart" } } };
+  assert.equal(g.onToolCall("view_file", view), "");
+  assert.equal(g.onToolCall("view_file", view), "");
+  assert.match(g.onToolCall("view_file", view), /graphify/);
+});
