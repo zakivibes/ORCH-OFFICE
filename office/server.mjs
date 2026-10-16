@@ -507,13 +507,24 @@ function worker(h, oc, s, now, detail = false) {
                 source = 'steps';
                 // fold the running turn into the session totals so the header counts it too
                 totals = add(totals, usage);
-            }
-        }
         const elapsed = now - since;
         const tokens = Object.values(usage).reduce((a, b) => a + b, 0);
+
+        const runningThinking = turnEvents.filter((e) => e.ev.t === 'thinking.delta').map((e) => e.ev.text).join('');
+        const runningText = turnEvents.filter((e) => e.ev.t === 'text.delta').map((e) => e.ev.text).join('');
+        const runningTools = turnEvents.filter((e) => e.ev.t === 'tool.call').map((e) => ({
+            id: e.ev.id,
+            name: e.ev.name,
+            summary: summariseInput(e.ev.input),
+            at: e.at
+        }));
+
         current = {
             startedAt: since, elapsedMs: elapsed, steps, toolCalls: callIds.size, usage, source,
             tokensPerMin: elapsed > 0 ? Math.round(tokens / (elapsed / 60_000)) : 0,
+            thinking: runningThinking,
+            text: runningText,
+            recentTools: runningTools.slice(-15),
         };
     }
 
@@ -618,6 +629,8 @@ function worker(h, oc, s, now, detail = false) {
         feed: feed.slice(-60),
         conversation,
         worktree: s.worktree_branch,
+        liveThinking: running ? runningThinking : (events.filter((e) => e.ev.t === 'thinking.delta').slice(-40).map((e) => e.ev.text).join('') || ''),
+        liveText: running ? runningText : (lastTurn?.result_text || text || ''),
     };
 }
 
