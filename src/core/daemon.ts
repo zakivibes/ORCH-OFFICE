@@ -11,6 +11,7 @@ import { Registry, type OpenArgs } from "./registry.js";
 import { Policy, type NarrowRequest } from "../permissions/policy.js";
 import type { Event, ToolId } from "./types.js";
 import { scoreSession } from "./progress.js";
+import { buildHandoff, digestsOfJob } from "./notebook.js";
 import { loadPrograms, savePrograms, addProgram, link, setWeight, findProgram, programPct } from "./programs.js";
 import { readTokens } from "./limits.js";
 
@@ -255,6 +256,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
 
     case "/stream":
       return json(res, 200, { events: ctx.store.eventsSince(String(body.sessionId), Number(body.sinceSeq ?? 0)) });
+
+    case "/notebook": {
+      const sid = String(body.sessionId);
+      const s = ctx.store.getSession(sid);
+      const j = ctx.store.getJob(sid);
+      if (!s || !j) return json(res, 404, { error: "no job on that session" });
+      const sessions = digestsOfJob(ctx.store, s.cwd, j.path, sid);
+      const handoff = buildHandoff(ctx.store, { cwd: s.cwd, jobPath: j.path, jobText: j.text, sessionId: sid });
+      return json(res, 200, { sessions, handoff });
+    }
 
     case "/list":
       return json(res, 200, { sessions: ctx.store.listSessions(body.includeClosed !== false) });

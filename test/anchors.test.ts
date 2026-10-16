@@ -136,7 +136,8 @@ test("registry.send with a job file prepends the job text and anchors heading", 
 
   const events: Event[] = [];
   for await (const ev of reg.send({ sessionId: handle.id, prompt: "go" })) events.push(ev);
-  assert.ok(adapter.lastPrompt.startsWith("go\n\n## Job (job.txt)\n"));
+  assert.ok(adapter.lastPrompt.startsWith("go\n\n## Start routine (orch)\n"));
+  assert.ok(adapter.lastPrompt.includes("\n## Job (job.txt)\n"));
   assert.ok(adapter.lastPrompt.includes("fix the level cap"));
   assert.ok(adapter.lastPrompt.includes("## Anchors (from the code graph"));
   // no graphify-out in cwd -> empty pack -> the session is not marked as graph-covered

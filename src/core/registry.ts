@@ -10,11 +10,15 @@ import { fmtTokens, loadLimits, readTokens } from "./limits.js";
 import { LoopGuard } from "./loopGuard.js";
 
 /** The prompt for an automatic follow-up turn after a FIRST_WRITE stop. */
+const NUDGE_SETTLE_MS = Number(process.env.ORCH_NUDGE_SETTLE_MS ?? 1500);
 const NUDGE_PROMPT =
   "Continue the same job. Write now; do not re-read files you already read. If an item is done, " +
   "move to the next one. End with Assumptions + files + real last test lines.";
 import { agentsMdWarning, buildAnchorPack, jobBasename, readJobText } from "./anchors.js";
 import { parseJob } from "./jobs.js";
+import { START_ROUTINE, buildHandoff } from "./notebook.js";
+import { buildFileMap } from "./digest.js";
+import { selectCards } from "./cards.js";
 import {
   addUsage,
   zeroUsage,
@@ -247,8 +251,19 @@ export class Registry extends EventEmitter {
         this.store.setJob(args.sessionId, jobPath, jobText, JSON.stringify(parseJob(jobText).items));
         const pack = await buildAnchorPack(handle.cwd, jobText);
         if (pack) this.graphSessions.add(args.sessionId);
+        // Memory the worker would otherwise rebuild from zero: what earlier sessions of this job did
+        // (derived from stored events), the job's file map with line numbers, curated project notes.
+        let memory = "";
+        try {
+          memory =
+            buildHandoff(this.store, { cwd: handle.cwd, jobPath, jobText, sessionId: args.sessionId }) +
+            buildFileMap(handle.cwd, jobText) +
+            selectCards(jobText);
+        } catch (e) {
+          yield { t: "text.delta", text: `[orch] hand-off skipped: ${e instanceof Error ? e.message : String(e)}\n` };
+        }
         prompt =
-          `${args.prompt}\n\n## Job (${jobBasename(jobPath)})\n${jobText}\n\n` +
+          `${args.prompt}\n\n${START_ROUTINE}\n${memory}## Job (${jobBasename(jobPath)})\n${jobText}\n\n` +
           `## Anchors (from the code graph — start here, graph-first rule satisfied)\n${pack}`;
       } else {
         yield { t: "text.delta", text: `[orch] job file not readable: ${jobPath}\n` };
@@ -407,6 +422,9 @@ export class Registry extends EventEmitter {
     const used = this.nudges.get(sessionId) ?? 0;
     if (limits.autoNudges <= 0 || used >= limits.autoNudges) return false;
     this.nudges.set(sessionId, used + 1);
+    // The stopped turn was aborted a moment ago; let its trailing events settle before the next
+    // turn drains the queue, or its idle can end the nudge turn instantly.
+    await new Promise((r) => setTimeout(r, NUDGE_SETTLE_MS));
     const note: Event = { t: "text.delta", text: `[orch] auto-nudge ${used + 1}/${limits.autoNudges}\n` };
     this.store.appendEvent(sessionId, note);
     this.emit("event", sessionId, note);

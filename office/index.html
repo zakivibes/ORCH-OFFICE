@@ -738,11 +738,18 @@ function jobTabBody(w) {
       <div class="hint">No job anchored to this session (coordinators anchor one with <b>set_job</b> / <b>orch_job</b>).${jd.accepted ? ` A grade exists: <b style="color:var(--gold)">${acc}%</b>${jd.accepted.note ? ' — ' + esc(jd.accepted.note) : ''}.` : ''}</div>
       ${jd.accepted ? gradeForm : ''}`;
   }
+  const nb = jd.notebook;
+  const nbPart = nb ? `<div class="sec">Hand-off · ${nb.earlier.length} earlier session${nb.earlier.length === 1 ? '' : 's'}</div>
+    <div class="mrow" title="Tool calls this session made before its first edit. Lower is better; a hand-off should bring it under 10."><span>Calls before first edit</span><b style="color:${nb.self.callsBeforeFirstEdit == null ? '#ff6b6b' : nb.self.callsBeforeFirstEdit <= 10 ? '#3ddc84' : nb.self.callsBeforeFirstEdit <= 30 ? '#ffb020' : '#ff6b6b'}">${nb.self.callsBeforeFirstEdit == null ? 'no edit yet' : nb.self.callsBeforeFirstEdit}</b></div>
+    <div class="mrow" title="Files this session read that an earlier session of the same job had already read"><span>Files re-read from earlier sessions</span><b style="color:${nb.self.reReads === 0 ? '#3ddc84' : '#ffb020'}">${nb.self.reReads} of ${nb.self.reads}</b></div>
+    ${nb.earlier.length ? `<table class="grid"><thead><tr><th>Earlier session</th><th>Model</th><th>Calls</th><th>1st edit</th><th>Edits</th><th>Why it stopped</th></tr></thead><tbody>${nb.earlier.map((e) => `<tr><td>${esc(e.label)}</td><td>${esc(String(e.model).split('/').pop())}</td><td>${e.calls}</td><td>${e.callsBeforeFirstEdit == null ? '—' : '@' + e.callsBeforeFirstEdit}</td><td>${e.edits}</td><td title="${esc((e.stops || []).join(' | '))}">${esc(String((e.stops || [])[e.stops.length - 1] || '—').slice(0, 60))}</td></tr>`).join('')}</tbody></table>` : '<div class="hint">First session of this job: nothing to hand off.</div>'}
+    ${nb.handoff ? `<details style="margin-top:6px"><summary class="hint" style="cursor:pointer">hand-off the worker received (${nb.handoff.length} chars)</summary><pre>${esc(nb.handoff)}</pre></details>` : ''}` : '';
   const m = jd.metrics || {};
   const turns = (m.perTurn || []).map((p) => `<tr><td>${p.n}</td><td>${p.calls}</td><td>${p.edits}</td><td>${p.explores}</td>` +
     `<td>${p.firstWriteStep == null ? '—' : '@' + p.firstWriteStep}</td>` +
     `<td>${p.processed == null ? '—' : fmtTok(p.processed)}</td><td>${p.waste == null ? '—' : fmtTok(p.waste)}</td></tr>`).join('');
   return `${jobPart}
+    ${nbPart}
     <div class="sec">Thrift vs limits</div>${metricsBlock(m, jd.limits || {})}
     ${turns ? `<div class="sec">Per-turn shape</div><table class="grid"><thead><tr><th>#</th><th>Calls</th><th>Edits</th><th>Explore</th><th>1st write</th><th>Processed</th><th>Waste</th></tr></thead><tbody>${turns}</tbody></table>` : ''}`;
 }

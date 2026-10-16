@@ -25,20 +25,20 @@ import type { Limits } from "./limits.js";
  * Each reason says what to do instead, because the stop message is what the coordinator (and
  * the next session's hand-off) reads.
  */
-const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool",
+export const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool",
   // agy names: its file writes and generated images are progress too.
   "write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "generate_image"]);
-const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
+export const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
 const READ_TOOLS = new Set(["read", "view", "view_file"]);
 /** A shell command that writes a file: heredoc/redirect, sed -i, or a script that opens a file for writing. */
-const SHELL_WRITE = /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi|open\([^)]*['"]w['"]|\.write(_text)?\(|writeFileSync/;
+export const SHELL_WRITE = /(^|[;&|]\s*)(cat|tee) [^|]*>|sed -i|perl -pi|open\([^)]*['"]w['"]|\.write(_text)?\(|writeFileSync/;
 const EXPLORE_TOOLS = new Set(["read", "view", "grep", "glob", "list", "ls",
   "view_file", "list_dir", "grep_search", "find_by_name"]);
 const EXPLORE_CMD = /^\s*(cd [^;&]+(&&|;)\s*)?(rtk )?(grep|rg|sed -n|cat|head|tail|find|ls|wc)\b/;
 const GRAPH_CMD = /\bgraphify (explain|query|path)\b/;
 
 /** agy wraps a call's arguments as `{tool_info: {name, parameters}}`; the rules read the arguments. */
-function argsOf(input: unknown): Record<string, unknown> | null {
+export function argsOf(input: unknown): Record<string, unknown> | null {
   if (!input || typeof input !== "object") return null;
   const i = input as Record<string, unknown>;
   const info = i.tool_info as Record<string, unknown> | undefined;
@@ -46,17 +46,17 @@ function argsOf(input: unknown): Record<string, unknown> | null {
   return i;
 }
 
-function commandOf(input: unknown): string {
+export function commandOf(input: unknown): string {
   const i = argsOf(input);
   if (!i) return "";
   const c = i.command ?? i.CommandLine;
   return typeof c === "string" ? c : "";
 }
 
-function fileOf(input: unknown): string {
+export function fileOf(input: unknown): string {
   const i = argsOf(input);
   if (!i) return "";
-  const f = i.filePath ?? i.file_path ?? i.path ?? i.AbsolutePath;
+  const f = i.filePath ?? i.file_path ?? i.path ?? i.AbsolutePath ?? i.TargetFile;
   return typeof f === "string" ? f : "";
 }
 

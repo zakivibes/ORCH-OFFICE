@@ -12,6 +12,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// Hand-off notebook (pure functions over stored events); the Office still works without a build.
+const NB = await import(pathToFileURL(join(HERE, '..', 'dist', 'core', 'notebook.js')).href).catch(() => null);
 const PORT = Number(process.env.PORT ?? 4747);
 const DB_PATH = process.env.ORCH_DB ?? join(homedir(), '.orchestrator', 'orch.db');
 const DEFAULT_HOURS = Number(process.env.ARCADE_WINDOW_HOURS ?? 12);
@@ -716,6 +718,27 @@ function sameOriginJson(req) {
     return String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json');
 }
 
+// What earlier sessions of this session's job did, plus this session's own shape (Job tab).
+function notebookFor(h, s) {
+    if (!NB) return null;
+    try {
+        const job = h.prepare('SELECT path, text FROM jobs WHERE session_id = ?').get(s.id);
+        if (!job) return null;
+        const base = String(job.path).split('/').pop();
+        const rows = h.prepare('SELECT s.id, s.label, s.model, s.created_at AS createdAt FROM sessions s JOIN jobs j ON j.session_id = s.id WHERE s.cwd = ? ORDER BY s.created_at').all(s.cwd)
+            .filter((r) => r.id !== s.id && r.createdAt < s.created_at && String(h.prepare('SELECT path FROM jobs WHERE session_id = ?').get(r.id)?.path ?? '').split('/').pop() === base);
+        const digestOf = (r) => NB.digestSession(r, h.prepare('SELECT payload FROM events WHERE session_id = ? ORDER BY seq').all(r.id).map((e) => JSON.parse(e.payload)));
+        const earlier = rows.map(digestOf);
+        const self = digestOf({ id: s.id, label: s.label, model: s.model });
+        const slim = (d) => ({ id: d.id, label: d.label, model: d.model, calls: d.calls, callsBeforeFirstEdit: d.callsBeforeFirstEdit, edits: d.edits.length, reads: d.reads.length, stops: d.stops.slice(-2), done: d.done });
+        return {
+            earlier: earlier.map(slim),
+            self: { ...slim(self), reReads: NB.reReads(self, earlier) },
+            handoff: NB.formatHandoff(earlier, { cwd: s.cwd, jobPath: job.path, jobText: job.text, sessionId: s.id }),
+        };
+    } catch { return null; }
+}
+
 createServer(async (req, res) => {
     try {
         const url = new URL(req.url, 'http://localhost');
@@ -809,6 +832,7 @@ createServer(async (req, res) => {
                     metrics: thriftMetrics(h, oc, s, turns, totals, now),
                     limits: sessionLimits(),
                     costUsd,
+                    notebook: notebookFor(h, s),
                 }));
             } finally {
                 h.close();

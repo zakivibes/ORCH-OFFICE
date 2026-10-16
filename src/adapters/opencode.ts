@@ -295,7 +295,10 @@ export class OpencodeAdapter implements Adapter {
         const type = String(ev.type ?? "");
         const props = (ev.properties ?? {}) as Record<string, unknown>;
 
-        if (type === "message.updated" || type === "message.part.updated" || type === "message.part.delta") {
+        // Only part events are this turn's work. A bare message.updated is also what the aborted
+        // PREVIOUS turn emits while it winds down, and counting it let that turn's idle complete
+        // the next (nudge) turn after 1 ms with zero tokens.
+        if (type === "message.part.updated" || type === "message.part.delta") {
           sawActivity = true;
         }
 
