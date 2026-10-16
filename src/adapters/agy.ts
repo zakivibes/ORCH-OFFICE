@@ -73,10 +73,13 @@ export class AgyAdapter implements Adapter {
     ];
     if (opts.model) args.push("--model", opts.model);
 
+    const isBatch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.binary);
     const child = spawn(this.binary, args, {
       cwd: opts.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
+      shell: isBatch,
+      windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
 
     const raw = new AsyncQueue<unknown>();

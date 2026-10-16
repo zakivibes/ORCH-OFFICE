@@ -118,13 +118,69 @@
   .jobitem { padding: 5px 0; border-bottom: 1px dashed #2a2a44; font-size: 13px; }
   .evd { color: var(--dim); font-size: 11.5px; margin: 2px 0 0 56px; }
   .mrow, .mrow b { line-height: 1.5; }
+
+  /* ────────── Task Board Styles ────────── */
+  #tasks { position: absolute; inset: 0; overflow: auto; padding: 18px 24px 60px; background: var(--bg); }
+  #tasks[hidden] { display: none; }
+  .tb-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .tb-kpi-card { background: #16162a; border: 2px solid var(--line); border-radius: 8px; padding: 14px 18px; }
+  .tb-kpi-card .val { font: 700 28px Inter, sans-serif; color: var(--gold); }
+  .tb-kpi-card .lbl { font-size: 11.5px; font-weight: 700; color: var(--dim); text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; }
+  .tb-banner { background: linear-gradient(135deg, #181530 0%, #151525 100%); border: 2px solid #5a3a8a; border-radius: 10px; padding: 14px 18px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .tb-banner-title { font-size: 15px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  .tb-banner-hint { font-size: 12px; color: var(--dim); margin-top: 3px; }
+  .tb-filters { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .tb-filters button { font: 600 12.5px Inter, sans-serif; color: var(--ink); background: #1b1b30; border: 2px solid var(--line); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  .tb-filters button.on { border-color: var(--gold); color: var(--gold); background: #252240; }
+  .tb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 18px; }
+  .tb-card { background: var(--panel); border: 2px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; transition: border-color .2s, box-shadow .2s; }
+  .tb-card:hover { border-color: var(--gold); box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+  .tb-card.done { border-color: #246d49; }
+  .tb-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .tb-worker-info { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 700; color: var(--ink); }
+  .tb-goal { font-size: 13px; font-weight: 600; color: #eceaff; line-height: 1.45; word-break: break-word; background: #10101c; padding: 10px 12px; border-radius: 6px; border-left: 3px solid var(--gold); max-height: 115px; overflow-y: auto; }
+  .tb-goal::-webkit-scrollbar { width: 5px; }
+  .tb-goal::-webkit-scrollbar-thumb { background: #3b3b55; border-radius: 3px; }
+  .tb-pbar { display: flex; flex-direction: column; gap: 5px; }
+  .tb-pbar-track { height: 10px; background: #151524; border-radius: 5px; overflow: hidden; position: relative; border: 1px solid var(--line); }
+  .tb-pbar-fill { height: 100%; border-radius: 4px; transition: width .4s ease; background: linear-gradient(90deg, #7c5cff, #3ddc84); }
+  .tb-pbar-labels { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; }
+  .tb-items { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; padding-right: 4px; }
+  .tb-item { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; padding: 7px 10px; background: #141424; border-radius: 5px; border: 1px solid #24243a; line-height: 1.4; }
+  .tb-item.done { border-color: #1f5a3f; background: #0c1c14; }
+  .tb-item.doing { border-color: #6b5a1a; background: #1c180a; }
+  .tb-item-icon { font-size: 13px; line-height: 1; margin-top: 1px; }
+  .tb-item-text { flex: 1; word-break: break-word; }
+  .tb-item-evd { font-size: 11px; color: var(--dim); margin-top: 3px; font-family: ui-monospace, Menlo, monospace; }
+  .tb-speech { font-size: 12px; color: #cfcde8; background: #121222; border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; font-style: italic; max-height: 90px; overflow-y: auto; }
+  .tb-actions { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #24243a; padding-top: 10px; margin-top: 2px; }
+  .tb-actions button { font: 600 12px Inter, sans-serif; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--line); background: #1c1c30; color: var(--ink); cursor: pointer; }
+  .tb-actions button:hover { border-color: var(--gold); }
+
+  /* ────────── Task Detail Modal ────────── */
+  #taskDetailModal { position: fixed; inset: 0; background: rgba(5, 5, 14, 0.88); backdrop-filter: blur(6px); z-index: 10000; display: none; align-items: center; justify-content: center; padding: 20px; }
+  .td-modal-content { background: #121222; border: 2px solid #5a3a8a; border-radius: 12px; width: 100%; max-width: 980px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 12px 48px rgba(0,0,0,0.9); }
+  .td-modal-header { padding: 14px 20px; border-bottom: 2px solid var(--line); display: flex; justify-content: space-between; align-items: center; background: #18172c; }
+  .td-modal-body { padding: 20px 24px 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+  .td-sec-title { font-size: 13.5px; font-weight: 700; color: var(--gold); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+  .td-full-goal { background: #0c0c16; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.6; color: #eceaff; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; border-left: 4px solid var(--gold); }
+  .td-turn-card { background: #16162a; border: 1px solid #282846; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .td-turn-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #24243a; padding-bottom: 8px; font-size: 12.5px; font-weight: 700; }
+  .td-think-box { background: #1a1430; border: 1px solid #6c46b5; border-radius: 6px; padding: 12px 14px; color: #d8c2ff; font-size: 12.5px; font-style: italic; max-height: 220px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+  .td-reply-box { background: #0d1424; border: 1px solid #233454; border-radius: 6px; padding: 12px 14px; color: #eceaff; font-size: 13px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+  .td-prompt-box { background: #11111c; border: 1px dashed #30304c; border-radius: 6px; padding: 10px 12px; color: #a4a2c5; font-size: 12px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
+  .td-workers-nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 4px 0 10px; border-bottom: 1px solid #24243a; }
+  .td-worker-btn { font: 600 12px Inter, sans-serif; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: #1b1b30; color: var(--ink); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .td-worker-btn.active { border-color: var(--gold); background: #2b2548; color: var(--gold); font-weight: 700; }
+  .td-tool-pill { font: 500 11px ui-monospace, monospace; background: #182234; border: 1px solid #2b4566; color: #7cb7ff; padding: 2px 8px; border-radius: 4px; display: inline-block; margin: 2px 4px 2px 0; }
+
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>ORCH OFFICE</h1>
-    <nav class="views"><button data-view="office">🏢 Office</button><button data-view="dash">📊 Dashboard</button><a href="/graph" target="_blank" rel="noopener"><button title="code graph of the project (graphify)">🕸 Graph</button></a></nav>
+    <nav class="views"><button data-view="office">🏢 Office</button><button data-view="dash">📊 Dashboard</button><button data-view="tasks">📋 Task Board</button><a href="/graph" target="_blank" rel="noopener"><button title="code graph of the project (graphify)">🕸 Graph</button></a></nav>
     <button id="btnOpenModal" onclick="openOrchModal()" style="background:#1d3b24;border-color:#3ddc84;color:#3ddc84;font-weight:700;">🚀 Team launcher</button>
     <button id="btnStopAll" onclick="stopOrchestra()" style="background:#3b1d24;border-color:#ff4d6d;color:#ff4d6d;font-weight:700;" title="Close every live worker">🛑 Stop all</button>
     <span class="stat">On shift<b id="sOnline">0</b></span>
@@ -145,8 +201,19 @@
     <button id="pause" title="pause live updates">⏸</button>
     <span class="stat" id="sConn">● LIVE</span>
   </header>
-  <div id="stage"><canvas id="c"></canvas><div id="dash" hidden></div><div id="toasts"></div></div>
+  <div id="stage"><canvas id="c"></canvas><div id="dash" hidden></div><div id="tasks" hidden></div><div id="toasts"></div></div>
   <aside id="panel"></aside>
+</div>
+
+<!-- Modal: Task Detail Inspector -->
+<div id="taskDetailModal">
+  <div class="td-modal-content">
+    <div class="td-modal-header">
+      <div id="tdModalHeaderInfo" style="display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; color:var(--ink);"></div>
+      <button onclick="closeTaskDetail()" style="padding:6px 12px; font-weight:700; background:#2c1b26; border:1px solid #ff4d6d; color:#ff4d6d; border-radius:6px; cursor:pointer;">✕ Kapat</button>
+    </div>
+    <div class="td-modal-body" id="tdModalBody"></div>
+  </div>
 </div>
 
 <!-- Modal: set up and launch the team -->
@@ -559,8 +626,12 @@ function visible() { return ui.win === 'live' ? data.workers.filter((w) => w.sta
 function setView(v) {
   ui.view = v; saveUi();
   document.getElementById('dash').hidden = v !== 'dash';
+  const taskEl = document.getElementById('tasks');
+  if (taskEl) taskEl.hidden = v !== 'tasks';
   document.querySelectorAll('.views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  if (v === 'dash') renderDash(); else resize();
+  if (v === 'dash') renderDash();
+  else if (v === 'tasks') renderTaskBoard();
+  else resize();
 }
 document.querySelectorAll('.views button').forEach((b) => (b.onclick = () => setView(b.dataset.view)));
 const winSel = document.getElementById('win');
@@ -884,6 +955,361 @@ function exportCsv() {
   a.click(); URL.revokeObjectURL(a.href);
 }
 
+// ───────────────────────── task board ─────────────────────────
+let tbFilter = 'all';
+let activeDetailWorkerId = null;
+
+function setTbFilter(f) {
+  tbFilter = f;
+  renderTaskBoard();
+}
+
+function quickGrade(id, pct) {
+  fetch('/api/grade', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, pct: Number(pct), note: 'Approved via Task Board' })
+  }).then(r => r.json()).then(j => {
+    if (j.ok) {
+      toast(`✅ Task graded at ${pct}%`);
+      poll();
+    } else {
+      toast('❌ Grade failed: ' + (j.error || 'unknown'));
+    }
+  }).catch(e => toast('❌ Grade error: ' + e.message));
+}
+
+async function openTaskDetail(workerId) {
+  activeDetailWorkerId = workerId;
+  const modal = document.getElementById('taskDetailModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  const w = data.workers?.find(x => x.id === workerId) || { id: workerId, label: 'Worker', tool: '', model: '', state: '' };
+  const jp = w.jobPct;
+
+  // Header
+  const header = document.getElementById('tdModalHeaderInfo');
+  header.innerHTML = `
+    <span>${STATE_DOT(w)}</span>
+    <span style="font-size:16px;color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</span>
+    <span class="pill">${esc(w.tool)}</span>
+    <span class="pill" style="font-family:ui-monospace,monospace;font-size:11.5px;">${esc(w.model)}</span>
+    <span class="pill">${STATE_LABEL[w.state] || w.state}</span>
+  `;
+
+  // Body initial layout
+  const body = document.getElementById('tdModalBody');
+  const taskGoal = jp?.jobText || w.task || w.lastPrompt || 'Koordinatör tarafından belirlenmiş özel görev bulunmuyor.';
+  
+  let pct = 0;
+  if (jp?.accepted != null) pct = Math.round(jp.accepted * 100);
+  else if (jp?.auto != null) pct = Math.round(jp.auto * 100);
+  else if (w.state === 'gone') pct = 100;
+  else if (w.turns > 0) pct = Math.min(95, w.turns * 20);
+
+  const pColor = pct >= 100 ? '#3ddc84' : pct >= 40 ? '#ffb020' : '#7c5cff';
+
+  // Worker switcher buttons
+  const otherWorkersNav = (data.workers || []).map(o => `
+    <button class="td-worker-btn ${o.id === workerId ? 'active' : ''}" onclick="openTaskDetail('${o.id}')">
+      ${STATE_DOT(o)} ${esc(o.label)} <span style="font-size:11px;opacity:0.75">(${esc(o.tool)})</span>
+    </button>
+  `).join('');
+
+  // Checklist items
+  let itemsHtml = '';
+  if (jp?.items && jp.items.length > 0) {
+    itemsHtml = jp.items.map(it => {
+      const score = Number(it.score ?? 0);
+      const cls = score >= 1 ? 'done' : score > 0 ? 'doing' : 'open';
+      const icon = score >= 1 ? '✅' : score > 0 ? '⏳' : '⬜';
+      const evdHtml = (it.evidence && it.evidence.length) ? `<div class="tb-item-evd">↳ Kanıt: ${esc(it.evidence.join(' · '))}</div>` : '';
+      return `<div class="tb-item ${cls}">
+        <span class="tb-item-icon">${icon}</span>
+        <div class="tb-item-text">
+          <b>${esc(it.text)}</b>
+          ${evdHtml}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  body.innerHTML = `
+    <!-- Worker quick switcher -->
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:6px;">Tüm Yapay Zekalar (Diğerlerine Geçiş Yap):</div>
+      <div class="td-workers-nav">
+        ${otherWorkersNav || '<span class="hint">Başka aktif worker yok.</span>'}
+      </div>
+    </div>
+
+    <!-- Full Coordinator Goal (Scrollable) -->
+    <div>
+      <div class="td-sec-title">
+        <span>🎯 Koordinatörün Belirlediği Görevin Tamamı (Aşağı Kaydırarak Okuyabilirsiniz)</span>
+        <button onclick="navigator.clipboard?.writeText(document.getElementById('tdFullGoalText').innerText);toast('📋 Görev metni kopyalandı')" style="padding:4px 10px;font-size:11.5px;background:#1b1b30;border:1px solid var(--line);border-radius:5px;color:var(--gold);cursor:pointer;">📋 Metni Kopyala</button>
+      </div>
+      <div class="td-full-goal" id="tdFullGoalText">${esc(taskGoal)}</div>
+    </div>
+
+    <!-- Checklist / Progress -->
+    ${itemsHtml ? `
+    <div>
+      <div class="td-sec-title">
+        <span>📋 Görev Alt Adımları & İlerleme Oranı</span>
+        <span style="color:${pColor};font-weight:700;">%${pct} Tamamlandı</span>
+      </div>
+      <div class="tb-pbar" style="margin-bottom:10px;">
+        <div class="tb-pbar-track"><div class="tb-pbar-fill" style="width:${Math.max(2, pct)}%;background:${pColor};"></div></div>
+      </div>
+      <div class="tb-items" style="max-height:190px;">
+        ${itemsHtml}
+      </div>
+    </div>` : ''}
+
+    <!-- AI Thinking & Responses (Turn by turn) -->
+    <div>
+      <div class="td-sec-title">
+        <span>🧠 Yapay Zekanın Düşünceleri (Thinking) & 💬 Yanıtları (Ne Dedi / Ne Düşündü)</span>
+        <span style="font-size:12px;color:var(--dim);">${w.turns || 0} tur kaydı</span>
+      </div>
+      <div id="tdTurnsContainer" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="hint" style="padding:15px;text-align:center;">⏳ Düşünce ve konuşma kayıtları yükleniyor...</div>
+      </div>
+    </div>
+  `;
+
+  // Fetch full conversation & thoughts for this worker
+  try {
+    const res = await fetch(`/api/worker?id=${encodeURIComponent(workerId)}`, { cache: 'no-store' });
+    const detail = await res.json();
+    if (activeDetailWorkerId !== workerId) return; // switched worker while loading
+    const turns = detail?.conversation || [];
+    const container = document.getElementById('tdTurnsContainer');
+    if (!container) return;
+
+    if (!turns.length) {
+      container.innerHTML = `
+        <div class="hint" style="padding:20px;text-align:center;background:#10101c;border-radius:8px;border:1px dashed var(--line);">
+          Henüz tamamlanmış konuşma veya düşünce kaydı yok.
+          ${w.lastText ? `<div style="margin-top:10px;color:var(--ink);">Son durum: <i>"${esc(w.lastText)}"</i></div>` : ''}
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = turns.map(t => {
+      const running = !t.endedAt;
+      return `
+        <div class="td-turn-card">
+          <div class="td-turn-header">
+            <span>Tur #${t.n} · ${chatTime(t.startedAt)}</span>
+            <span style="font-size:11.5px;color:var(--dim);font-weight:400;">
+              ${t.usage ? fmtTok(processed(t.usage)) + ' tokens' : ''}
+              ${running ? ' · <span style="color:var(--gold);font-weight:700;">● Devam ediyor…</span>' : ''}
+              ${t.aborted ? ' · <span style="color:var(--warn)">⛔ Durduruldu</span>' : ''}
+            </span>
+          </div>
+
+          ${t.prompt ? `
+            <div>
+              <div style="font-size:11.5px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:4px;">📥 Koordinatörün Emri / İstemi:</div>
+              <div class="td-prompt-box">${esc(t.prompt)}</div>
+            </div>` : ''}
+
+          ${t.thinking ? `
+            <div>
+              <div style="font-size:11.5px;font-weight:700;color:#c084fc;text-transform:uppercase;margin-bottom:4px;">🧠 Yapay Zekanın Düşünce Süreci (Thinking / Akıl Yürütme):</div>
+              <div class="td-think-box">${esc(t.thinking)}</div>
+            </div>` : ''}
+
+          <div>
+            <div style="font-size:11.5px;font-weight:700;color:#60a5fa;text-transform:uppercase;margin-bottom:4px;">💬 Yapay Zekanın Cevabı / Ne Dediği:</div>
+            <div class="td-reply-box">${esc(t.reply || (running ? 'Yazıyor…' : '(Cevap metni bulunmuyor)'))}</div>
+          </div>
+
+          ${t.tools && t.tools.length ? `
+            <div>
+              <div style="font-size:11.5px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:4px;">🛠 Yaptığı İşlemler / Araç Çağrıları (${t.tools.length}):</div>
+              <div>
+                ${t.tools.map(tl => `<span class="td-tool-pill"><b>${esc(tl.name)}</b>${tl.summary ? ': ' + esc(tl.summary) : ''}</span>`).join('')}
+              </div>
+            </div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+  } catch (err) {
+    const container = document.getElementById('tdTurnsContainer');
+    if (container) container.innerHTML = `<div class="hint" style="color:var(--warn)">Konuşmalar yüklenemedi: ${esc(err.message)}</div>`;
+  }
+}
+
+function closeTaskDetail() {
+  const modal = document.getElementById('taskDetailModal');
+  if (modal) modal.style.display = 'none';
+  activeDetailWorkerId = null;
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeTaskDetail();
+});
+document.addEventListener('DOMContentLoaded', () => {
+  const modal = document.getElementById('taskDetailModal');
+  if (modal) {
+    modal.onclick = (e) => {
+      if (e.target.id === 'taskDetailModal') closeTaskDetail();
+    };
+  }
+});
+
+function renderTaskBoard() {
+  const el = document.getElementById('tasks');
+  if (!el || el.hidden) return;
+  const ws = visible();
+  if (!ws.length) {
+    el.innerHTML = '<div class="hint" style="text-align:center;padding:40px;font-size:15px;">No workers on shift yet. Launch your team from the Team Launcher!</div>';
+    return;
+  }
+
+  // Calculate stats
+  let totalTasks = ws.length;
+  let doneCount = 0;
+  let inProgressCount = 0;
+  let totalPctSum = 0;
+
+  const cardsData = ws.map(w => {
+    const jp = w.jobPct;
+    let pct = 0;
+    if (jp?.accepted != null) pct = Math.round(jp.accepted * 100);
+    else if (jp?.auto != null) pct = Math.round(jp.auto * 100);
+    else if (w.state === 'gone') pct = 100;
+    else if (w.turns > 0) pct = Math.min(95, w.turns * 20);
+
+    totalPctSum += pct;
+    if (pct >= 100 || w.state === 'gone') doneCount++;
+    else inProgressCount++;
+
+    return { w, jp, pct };
+  });
+
+  const avgPct = totalTasks ? Math.round(totalPctSum / totalTasks) : 0;
+
+  // Filter cards
+  const filtered = cardsData.filter(({ w, pct }) => {
+    if (tbFilter === 'active') return pct < 100 && w.state !== 'gone';
+    if (tbFilter === 'done') return pct >= 100 || w.state === 'gone';
+    return true;
+  });
+
+  // Render cards
+  const cardsHtml = filtered.map(({ w, jp, pct }) => {
+    const isDone = pct >= 100;
+    const pColor = pct >= 100 ? '#3ddc84' : pct >= 40 ? '#ffb020' : '#7c5cff';
+    
+    // Checklist items
+    let itemsHtml = '';
+    if (jp?.items && jp.items.length > 0) {
+      itemsHtml = jp.items.map(it => {
+        const score = Number(it.score ?? 0);
+        const cls = score >= 1 ? 'done' : score > 0 ? 'doing' : 'open';
+        const icon = score >= 1 ? '✅' : score > 0 ? '⏳' : '⬜';
+        const evdHtml = (it.evidence && it.evidence.length) ? `<div class="tb-item-evd">↳ ${esc(it.evidence.slice(-1)[0])}</div>` : '';
+        return `<div class="tb-item ${cls}">
+          <span class="tb-item-icon">${icon}</span>
+          <div class="tb-item-text">
+            <span>${esc(it.text)}</span>
+            ${evdHtml}
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      itemsHtml = `<div class="tb-item">
+        <span class="tb-item-icon">${isDone ? '✅' : (w.state === 'working' ? '⚙️' : '📝')}</span>
+        <div class="tb-item-text" style="color:var(--dim)">
+          ${w.turns ? `${w.turns} turn(s) completed · ${w.toolCalls} tool calls executed` : 'Waiting for coordinator instructions'}
+        </div>
+      </div>`;
+    }
+
+    const taskGoal = jp?.jobText || w.task || w.lastPrompt || 'General Coordinator Task';
+
+    return `<div class="tb-card ${isDone ? 'done' : ''}">
+      <div class="tb-header">
+        <div class="tb-worker-info">
+          <span>${STATE_DOT(w)}</span>
+          <span style="color:${COLORS[w.tool] || '#fff'}">${esc(w.label)}</span>
+          <span class="pill" style="font-size:11px;">${esc(w.tool)}</span>
+        </div>
+        <span class="pill" style="font-size:11px;">${STATE_LABEL[w.state] || w.state}</span>
+      </div>
+
+      <div class="tb-goal" onclick="openTaskDetail('${w.id}')" title="Görevi ve düşünceleri detaylı incelemek için tıklayın (Aşağı kaydırarak da okuyabilirsiniz)">
+        <strong>🎯 Görev (Kaydırarak Oku):</strong> ${esc(taskGoal)}
+      </div>
+
+      <div class="tb-pbar">
+        <div class="tb-pbar-labels">
+          <span style="color:var(--dim)">İlerleme</span>
+          <span style="color:${pColor};font-weight:700;">${pct}%</span>
+        </div>
+        <div class="tb-pbar-track">
+          <div class="tb-pbar-fill" style="width:${Math.max(2, pct)}%;background:${pColor};"></div>
+        </div>
+      </div>
+
+      <div class="tb-items">
+        ${itemsHtml}
+      </div>
+
+      ${w.lastText ? `<div class="tb-speech" title="${esc(w.lastText)}">💬 ${esc(w.lastText.slice(0, 140))}${w.lastText.length > 140 ? '…' : ''}</div>` : ''}
+
+      <div class="tb-actions">
+        <button onclick="openTaskDetail('${w.id}')" style="background:#282348;border-color:var(--gold);color:var(--gold);font-weight:700;">🔍 Detaylı İncele</button>
+        <button onclick="pick('${w.id}'); ui.tab='job'; setView('office');" title="İş detayları ve logları incele">⚙️ Panel</button>
+        ${!isDone ? `<button onclick="quickGrade('${w.id}', 100)" style="border-color:#3ddc84;color:#3ddc84;">✓ %100 Tamamla</button>` : `<span style="font-size:11.5px;color:#3ddc84;font-weight:600;">✓ Tamamlandı</span>`}
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="tb-kpis">
+      <div class="tb-kpi-card">
+        <div class="val">${totalTasks}</div>
+        <div class="lbl">Toplam Görev</div>
+      </div>
+      <div class="tb-kpi-card">
+        <div class="val" style="color:#7c5cff;">${inProgressCount}</div>
+        <div class="lbl">Devam Eden</div>
+      </div>
+      <div class="tb-kpi-card">
+        <div class="val" style="color:#3ddc84;">${doneCount}</div>
+        <div class="lbl">Tamamlanan</div>
+      </div>
+      <div class="tb-kpi-card">
+        <div class="val" style="color:var(--gold);">${avgPct}%</div>
+        <div class="lbl">Ortalama Bitiş</div>
+      </div>
+    </div>
+
+    <div class="tb-banner">
+      <div>
+        <div class="tb-banner-title">📋 Koordinatör Görev Panosu (Task Board)</div>
+        <div class="tb-banner-hint">Koordinatörün worker'lara atadığı tüm görevler, alt adımlar ve anlık tamamlanma oranları.</div>
+      </div>
+      <div class="tb-filters">
+        <button class="${tbFilter === 'all' ? 'on' : ''}" onclick="setTbFilter('all')">Tümü (${totalTasks})</button>
+        <button class="${tbFilter === 'active' ? 'on' : ''}" onclick="setTbFilter('active')">Devam Edenler (${inProgressCount})</button>
+        <button class="${tbFilter === 'done' ? 'on' : ''}" onclick="setTbFilter('done')">Tamamlananlar (${doneCount})</button>
+      </div>
+    </div>
+
+    <div class="tb-grid">
+      ${cardsHtml || '<div class="hint" style="grid-column:1/-1;text-align:center;padding:30px;">Bu filtrede gösterilecek görev yok.</div>'}
+    </div>
+  `;
+}
+
 // ───────────────────────── inspect panel ─────────────────────────
 const STATE_LABEL = { working: '⌨️ Working', idle: '💤 Idle — waiting for orders', ratelimited: '☕ Rate limited', error: '❗ Error', gone: '🏁 Shift over' };
 function usageBlock(w) {
@@ -1098,6 +1524,7 @@ async function poll() {
     set('sFresh', fmtTok(ws.reduce((a, w) => a + n(w.totals?.inputTokens), 0)));
     updateMorale();
     if (selected || first) renderPanel();
+    if (ui.view === 'tasks') renderTaskBoard();
     renderDash();
     lastOk = Date.now();
   } catch (e) { console.error('[office]', e); document.getElementById('sConn').title = String(e); }

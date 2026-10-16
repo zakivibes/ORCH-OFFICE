@@ -107,6 +107,7 @@ export class OpencodeAdapter implements Adapter {
       stdio: ["pipe", "pipe", "pipe"],
       shell: isBatch,
       env: childEnv,
+      windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
 
     const baseUrl = `http://127.0.0.1:${port}`;

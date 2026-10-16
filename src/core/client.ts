@@ -41,6 +41,7 @@ export class DaemonClient {
     const child = spawn(process.execPath, [join(HERE, "daemon-entry.js")], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
 

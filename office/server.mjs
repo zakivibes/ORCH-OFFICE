@@ -84,7 +84,8 @@ async function ensureDaemon() {
         console.log('Orchestrator daemon baslatiliyor...');
         const child = spawn(process.execPath, [DAEMON_ENTRY_PATH], {
             detached: true,
-            stdio: 'ignore'
+            stdio: 'ignore',
+            windowsHide: true,
         });
         child.unref();
 
@@ -541,9 +542,9 @@ function worker(h, oc, s, now, detail = false) {
         conversation = last30.map((t, i) => {
             const isRunning = running && t.id === lastTurn.id;
             let prompt = String(t.prompt || '');
-            if (prompt.length > 8000) prompt = prompt.slice(0, 8000) + '…(cut)';
+            if (prompt.length > 50000) prompt = prompt.slice(0, 50000) + '…(cut)';
             let reply = isRunning ? runningText : String(t.result_text || '');
-            if (reply.length > 15000) reply = reply.slice(-15000);
+            if (reply.length > 50000) reply = reply.slice(-50000);
             let usage = { ...ZERO(), ...parse(t.usage) };
             if (useOc) {
                 try {
@@ -560,8 +561,22 @@ function worker(h, oc, s, now, detail = false) {
                 aborted: !!t.aborted,
                 usage,
             };
-            if (isRunning && runningThinking)
-                entry.thinking = runningThinking.length > 4000 ? runningThinking.slice(-4000) : runningThinking;
+            let thinking = '';
+            const turnThinking = events
+                .filter((e) => e.ev.t === 'thinking.delta' && e.at >= t.started_at && (!t.ended_at || e.at <= t.ended_at))
+                .map((e) => e.ev.text).join('');
+            if (turnThinking) {
+                thinking = turnThinking;
+            } else if (isRunning && runningThinking) {
+                thinking = runningThinking;
+            }
+            if (thinking) entry.thinking = thinking;
+
+            const turnTools = events
+                .filter((e) => e.ev.t === 'tool.call' && e.at >= t.started_at && (!t.ended_at || e.at <= t.ended_at))
+                .map((e) => ({ id: e.ev.id, name: e.ev.name, summary: summariseInput(e.ev.input) }));
+            if (turnTools.length) entry.tools = turnTools;
+
             return entry;
         });
     }
@@ -587,15 +602,18 @@ function worker(h, oc, s, now, detail = false) {
             accepted: jp.accepted ? jp.accepted.pct : null,
             gradeNote: jp.accepted ? jp.accepted.note : null,
             gradeAt: jp.accepted ? jp.accepted.at : null,
-            items: jp.items.length,
+            itemsCount: jp.items.length,
+            items: jp.items,
+            jobPath: jp.job ? jp.job.path : null,
+            jobText: jp.job ? jp.job.text : null,
             hasJob: !!jp.job,
         } : null,
         turns: turns.length,
         turnRows: turnRows.slice(-30),
         current,
         files: [...files.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([path, at]) => ({ path, at })),
-        task: (turns[0]?.prompt ?? '').slice(0, 4000),
-        lastPrompt: (lastTurn?.prompt ?? '').slice(0, 1500),
+        task: turns[0]?.prompt ?? '',
+        lastPrompt: lastTurn?.prompt ?? '',
         reply: (lastTurn?.result_text || text).slice(-3000),
         feed: feed.slice(-60),
         conversation,
