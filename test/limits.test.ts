@@ -7,6 +7,7 @@ import { Store } from "../src/core/db.js";
 import { Registry } from "../src/core/registry.js";
 import { DEFAULT_LIMITS, loadLimits } from "../src/core/limits.js";
 import { zeroUsage, type Adapter, type Event, type Handle, type Usage } from "../src/core/types.js";
+import { LoopGuard } from "../src/core/loopGuard.js";
 
 const dir = mkdtempSync(join(tmpdir(), "orch-limits-"));
 const limitsFile = join(dir, "limits.json");
@@ -417,4 +418,10 @@ test("a CONTEXT stop is not nudged", async () => {
   assert.equal(await reg.autoNudge(handle.id), false, "CONTEXT needs a fresh session, not a nudge");
   assert.equal(adapter.interrupted, 1, "no extra turn was started");
   assert.deepEqual(notes, []);
+});
+
+test("loop guard: paging one file with view_file is not an identical-call loop", () => {
+  const g = new LoopGuard({ ...DEFAULT_LIMITS, maxRepeatCalls: 3, maxExploreBeforeGraph: 0, maxStepsBeforeFirstEdit: 0, maxExploreSinceLastEdit: 0 });
+  const input = { tool_info: { name: "view_file", parameters: { AbsolutePath: "/x/big.dart" } } };
+  for (let i = 0; i < 10; i++) assert.equal(g.onToolCall("view_file", input), "");
 });

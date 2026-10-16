@@ -25,7 +25,9 @@ import type { Limits } from "./limits.js";
  * Each reason says what to do instead, because the stop message is what the coordinator (and
  * the next session's hand-off) reads.
  */
-const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool"]);
+const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "patch", "apply_patch", "str_replace_based_edit_tool",
+  // agy names: its file writes and generated images are progress too.
+  "write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file", "generate_image"]);
 const TEST_CMD = /\b(npm (run )?test|flutter test|dart test|node (--test )?tests?\/|jest|pytest|vitest|go test)\b/;
 const READ_TOOLS = new Set(["read", "view"]);
 /** A shell command that writes a file: heredoc/redirect, sed -i, or a script that opens a file for writing. */
@@ -50,6 +52,9 @@ function fileOf(input: unknown): string {
 /** The call's identity, without fields that vary between otherwise identical calls. */
 function signature(name: string, input: unknown): string | null {
   if (!input || typeof input !== "object" || Object.keys(input).length === 0) return null;
+  // agy reports view_file without its line range, so paging through one big file in ranges
+  // would look like the identical call; same-file reads have their own rule.
+  if (READ_TOOLS.has(name) || name === "view_file") return null;
   const { description: _d, workdir: _w, timeout: _t, ...rest } = input as Record<string, unknown>;
   return `${name} ${JSON.stringify(rest)}`;
 }
