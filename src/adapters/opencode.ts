@@ -319,6 +319,17 @@ export class OpencodeAdapter implements Adapter {
             if (delta) coalescer.push(delta);
             continue;
           }
+          if ((ptype === "reasoning" || ptype === "thinking") && (typeof part.text === "string" || typeof part.reasoning === "string")) {
+            if (!assistantIds.has(partMessageId)) continue;
+            const full = (typeof part.reasoning === "string" ? part.reasoning : part.text) as string;
+            const thinkKey = `think:${partMessageId}`;
+            const prev = emitted.get(thinkKey) ?? "";
+            if (full === prev) continue;
+            const delta = full.startsWith(prev) ? full.slice(prev.length) : full;
+            emitted.set(thinkKey, full);
+            if (delta) yield { t: "thinking.delta", text: delta };
+            continue;
+          }
           if (ptype === "tool" || ptype === "tool-invocation") {
             const callId = String(part.callID ?? part.id ?? "");
             const state = part.state as { status?: string; input?: unknown } | undefined;

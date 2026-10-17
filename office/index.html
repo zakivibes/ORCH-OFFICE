@@ -1432,9 +1432,9 @@ function renderLiveActivity() {
         <div class="act-stream-box">
           <div class="act-stream-lbl">
             <span style="color:#c084fc;">🧠 Düşünce Akışı (Thinking / Akıl Yürütme):</span>
-            ${isThinking ? '<span style="font-size:11px;color:#c084fc;font-weight:700;">● Canlı Akıyor</span>' : '<span style="font-size:11px;color:var(--dim);">Son Düşünce</span>'}
+            ${isThinking ? '<span style="font-size:11px;color:#c084fc;font-weight:700;">● Canlı Akıyor</span>' : (thinkingText ? '<span style="font-size:11px;color:var(--dim);">Son Düşünce</span>' : '')}
           </div>
-          <div class="act-think-term">${thinkingText ? esc(thinkingText) : '<span style="color:var(--dim);font-style:normal;">Model şu anda düşünce akışı üretmiyor veya bu aşamada düşünce tokeni gelmedi.</span>'}</div>
+          <div class="act-think-term">${thinkingText ? esc(thinkingText) : `<span style="color:var(--dim);font-style:normal;">${isWorking ? '⚡ Model şu anda doğrudan çıktı / kod yazma aşamasında (alttaki yazışma kutusuna bakın) veya seçilen model düşünce (reasoning) tokeni üretmiyor.' : 'Model şu anda beklemede (boşta). Yeni bir görev verildiğinde düşünce veya yazışma akışı burada canlı akacaktır.'}</span>`}</div>
         </div>
 
         <!-- Live Writing / Output Stream -->

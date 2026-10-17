@@ -159,7 +159,14 @@ export class ClaudeAdapter implements Adapter {
         if (marker) { yield marker; continue; }
         const norm = this.normalize(raw, usage, (u) => Object.assign(usage, u), (c) => (costUsd = c));
 
-        if (norm.t === "text.delta" || norm.t === "thinking.delta") {
+        if (norm.t === "thinking.delta") {
+          const flushed = coalescer.flush();
+          if (flushed) yield { t: "text.delta", text: flushed };
+          yield norm;
+          continue;
+        }
+
+        if (norm.t === "text.delta") {
           coalescer.push(norm.text);
           continue;
         }
@@ -227,6 +234,12 @@ export class ClaudeAdapter implements Adapter {
         thinkingTokens: Number((u.output_tokens_details as { thinking_tokens?: number })?.thinking_tokens ?? 0),
       });
       const content = Array.isArray(msg.content) ? msg.content : [];
+      const thinkBlock = content.find((c) => (c as { type?: string }).type === "thinking" || (c as { type?: string }).type === "redacted_thinking") as
+        | { type?: string; thinking?: string }
+        | undefined;
+      if (thinkBlock?.thinking) {
+        return { t: "thinking.delta", text: thinkBlock.thinking };
+      }
       const toolUse = content.find((c) => (c as { type?: string }).type === "tool_use") as
         | { id?: string; name?: string; input?: unknown }
         | undefined;
