@@ -507,6 +507,8 @@ function worker(h, oc, s, now, detail = false) {
                 source = 'steps';
                 // fold the running turn into the session totals so the header counts it too
                 totals = add(totals, usage);
+            }
+        }
         const elapsed = now - since;
         const tokens = Object.values(usage).reduce((a, b) => a + b, 0);
 
